@@ -273,10 +273,11 @@ MonoBehaviour:
   splatScale: 0.35
   blobSharpness: 3
   resolutionScale: 0.75
+  solidColors: 1
   threshold: 0.35
-  edgeSoftness: 0.08
-  edgeHighlight: 0.25
-  colorSaturation: 1.3
+  edgeSoftness: 0.05
+  edgeHighlight: -0.15
+  colorSaturation: 1.1
 --- !u!1 &619394800
 GameObject:
   m_ObjectHideFlags: 0

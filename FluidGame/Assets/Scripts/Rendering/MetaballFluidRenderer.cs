@@ -35,21 +35,25 @@ public class MetaballFluidRenderer : MonoBehaviour
     public float resolutionScale = 0.75f;
 
     [Header("Composite Settings")]
+    [Tooltip("When ON, each pixel snaps to the nearest fluid type color. " +
+             "When OFF, colors blend smoothly at boundaries between types.")]
+    public bool solidColors = true;
+
     [Tooltip("Accumulated weight threshold for solid fluid. Lower = thicker.")]
     [Range(0.01f, 2f)]
     public float threshold = 0.35f;
 
-    [Tooltip("Smoothness of the fluid edge.")]
+    [Tooltip("Smoothness of the fluid edge. Lower = sharper, more paint-like.")]
     [Range(0.01f, 0.5f)]
-    public float edgeSoftness = 0.08f;
+    public float edgeSoftness = 0.05f;
 
-    [Tooltip("Bright rim at fluid edges.")]
-    [Range(0f, 1f)]
-    public float edgeHighlight = 0.25f;
+    [Tooltip("Edge shading: negative = darken edges (paint depth), positive = bright rim (neon).")]
+    [Range(-1f, 1f)]
+    public float edgeHighlight = -0.15f;
 
     [Tooltip("Color vibrancy boost.")]
     [Range(0.5f, 2f)]
-    public float colorSaturation = 1.3f;
+    public float colorSaturation = 1.1f;
 
     // ─── Public for RendererFeature ──────────────────────────────
 
@@ -187,6 +191,18 @@ public class MetaballFluidRenderer : MonoBehaviour
         CompositeMaterial.SetFloat("_EdgeSoftness", edgeSoftness);
         CompositeMaterial.SetFloat("_EdgeHighlight", edgeHighlight);
         CompositeMaterial.SetFloat("_ColorSaturation", colorSaturation);
+        CompositeMaterial.SetFloat("_SolidColors", solidColors ? 1f : 0f);
+
+        // Pass fluid type colors to the shader for nearest-color snapping
+        var types = sim.fluidTypes;
+        int count = Mathf.Min(types.Length, 8); // Shader supports up to 8 types
+        Vector4[] colors = new Vector4[8];
+        for (int i = 0; i < count; i++)
+        {
+            colors[i] = types[i].color;
+        }
+        CompositeMaterial.SetFloat("_FluidTypeCount", (float)count);
+        CompositeMaterial.SetVectorArray("_FluidTypeColors", colors);
     }
 
     // ─── RT Management ───────────────────────────────────────────
