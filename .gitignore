@@ -5,3 +5,7 @@ FluidGame/Temp
 FluidGame/UserSettings
 FluidGame/.idea
 FluidGame/.utmp
+*.csproj
+*.sln
+artifacts
+FluidGame/obj

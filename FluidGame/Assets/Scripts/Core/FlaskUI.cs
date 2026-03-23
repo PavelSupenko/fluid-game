@@ -1,12 +1,8 @@
 using UnityEngine;
 
 /// <summary>
-/// Simple UI for flask color selection and absorbed particle counts.
-/// Uses IMGUI (OnGUI) for quick prototyping — no Canvas/EventSystem needed.
-///
-/// Shows a row of colored buttons at the bottom of the screen, one per fluid type.
-/// The selected type is highlighted. Each button shows the absorbed count.
-/// Also draws a suction radius indicator around the cursor when sucking.
+/// UI for flask color selection and absorbed particle counts.
+/// Works with both FluidSimulationGPU and FluidSimulationJobs.
 ///
 /// SETUP: Add to any GameObject in the scene. Finds FlaskController automatically.
 /// </summary>
@@ -18,27 +14,42 @@ public class FlaskUI : MonoBehaviour
     public int bottomMargin = 20;
 
     [Header("Cursor Indicator")]
-    [Tooltip("Show a circle at the cursor when sucking")]
     public bool showSuctionRadius = true;
 
     // ─── Internals ───────────────────────────────────────────────
 
     private FlaskController flask;
-    private FluidSimulationGPU sim;
+    private FluidTypeDefinition[] fluidTypes;
     private Material circleMaterial;
-
-    // Cached style textures
     private Texture2D[] colorTextures;
     private Texture2D selectedBorderTex;
 
     void Start()
     {
         flask = FindObjectOfType<FlaskController>();
-        sim = FindObjectOfType<FluidSimulationGPU>();
-
-        if (flask == null || sim == null)
+        if (flask == null)
         {
-            Debug.LogError("[FlaskUI] FlaskController or FluidSimulationGPU not found!");
+            Debug.LogError("[FlaskUI] FlaskController not found!");
+            enabled = false;
+            return;
+        }
+
+        // Find fluid types from whichever simulation is active
+        var gpu = FindObjectOfType<FluidSimulationGPU>();
+        if (gpu != null && gpu.enabled)
+        {
+            fluidTypes = gpu.fluidTypes;
+        }
+        else
+        {
+            var jobs = FindObjectOfType<FluidSimulationJobs>();
+            if (jobs != null && jobs.enabled)
+                fluidTypes = jobs.fluidTypes;
+        }
+
+        if (fluidTypes == null || fluidTypes.Length == 0)
+        {
+            Debug.LogError("[FlaskUI] No fluid types found!");
             enabled = false;
             return;
         }
@@ -51,15 +62,10 @@ public class FlaskUI : MonoBehaviour
 
     void BuildColorTextures()
     {
-        var types = sim.fluidTypes;
-        colorTextures = new Texture2D[types.Length];
+        colorTextures = new Texture2D[fluidTypes.Length];
+        for (int i = 0; i < fluidTypes.Length; i++)
+            colorTextures[i] = MakeSolidTexture(fluidTypes[i].color);
 
-        for (int i = 0; i < types.Length; i++)
-        {
-            colorTextures[i] = MakeSolidTexture(types[i].color);
-        }
-
-        // Bright white border texture for selected button
         selectedBorderTex = MakeSolidTexture(Color.white);
     }
 
@@ -75,17 +81,14 @@ public class FlaskUI : MonoBehaviour
 
     void OnGUI()
     {
-        if (flask == null || sim == null) return;
+        if (flask == null || fluidTypes == null) return;
 
-        var types = sim.fluidTypes;
-        int count = types.Length;
+        int count = fluidTypes.Length;
 
-        // Center the button row horizontally
         float totalWidth = count * (buttonWidth + 10) - 10;
         float startX = (Screen.width - totalWidth) * 0.5f;
         float y = Screen.height - buttonHeight - bottomMargin;
 
-        // Label style for count text
         var countStyle = new GUIStyle(GUI.skin.label)
         {
             alignment = TextAnchor.MiddleCenter,
@@ -94,13 +97,8 @@ public class FlaskUI : MonoBehaviour
         };
         countStyle.normal.textColor = Color.white;
 
-        // Small label for type name
-        var nameStyle = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.UpperCenter,
-            fontSize = 10
-        };
-        nameStyle.normal.textColor = new Color(1, 1, 1, 0.8f);
+        var shadowStyle = new GUIStyle(countStyle);
+        shadowStyle.normal.textColor = new Color(0, 0, 0, 0.7f);
 
         for (int i = 0; i < count; i++)
         {
@@ -109,46 +107,43 @@ public class FlaskUI : MonoBehaviour
 
             bool isSelected = (flask.targetTypeIndex == i);
 
-            // Draw selection highlight border
+            // Selection border
             if (isSelected)
             {
                 Rect borderRect = new Rect(x - 3, y - 3, buttonWidth + 6, buttonHeight + 6);
                 GUI.DrawTexture(borderRect, selectedBorderTex);
             }
 
-            // Draw colored button background
+            // Color background
             GUI.DrawTexture(btnRect, colorTextures[i]);
 
-            // Draw absorbed count on top
+            // Absorbed count
             int absorbed = (flask.AbsorbedCounts != null && i < flask.AbsorbedCounts.Length)
                 ? flask.AbsorbedCounts[i] : 0;
 
-            // Dark shadow for readability on any color
-            var shadowStyle = new GUIStyle(countStyle);
-            shadowStyle.normal.textColor = new Color(0, 0, 0, 0.7f);
             Rect shadowRect = new Rect(btnRect.x + 1, btnRect.y + 1, btnRect.width, btnRect.height);
             GUI.Label(shadowRect, absorbed.ToString(), shadowStyle);
             GUI.Label(btnRect, absorbed.ToString(), countStyle);
 
-            // Invisible button on top to detect clicks
+            // Click detection
             if (GUI.Button(btnRect, GUIContent.none, GUIStyle.none))
-            {
                 flask.SetTargetType(i);
-            }
         }
 
-        // Instructions text
-        var instructionStyle = new GUIStyle(GUI.skin.label)
+        // Instructions
+        var instrStyle = new GUIStyle(GUI.skin.label)
         {
             alignment = TextAnchor.MiddleCenter,
             fontSize = 13
         };
-        instructionStyle.normal.textColor = new Color(1, 1, 1, 0.6f);
+        instrStyle.normal.textColor = new Color(1, 1, 1, 0.6f);
 
         Rect instrRect = new Rect(0, y - 30, Screen.width, 25);
-        string typeName = (flask.targetTypeIndex >= 0 && flask.targetTypeIndex < types.Length)
-            ? types[flask.targetTypeIndex].name : "???";
-        GUI.Label(instrRect, $"Selected: {typeName}  |  Hold LMB to suck  |  Total absorbed: {flask.TotalAbsorbed}", instructionStyle);
+        string typeName = (flask.targetTypeIndex >= 0 && flask.targetTypeIndex < fluidTypes.Length)
+            ? fluidTypes[flask.targetTypeIndex].name : "???";
+        GUI.Label(instrRect,
+            $"Selected: {typeName}  |  Hold LMB to suck  |  Total absorbed: {flask.TotalAbsorbed}",
+            instrStyle);
     }
 
     // ─── Cursor Indicator ────────────────────────────────────────
@@ -171,21 +166,18 @@ public class FlaskUI : MonoBehaviour
         if (!flask.IsSucking) return;
 
         circleMaterial.SetPass(0);
-
         GL.PushMatrix();
         GL.MultMatrix(Matrix4x4.identity);
 
-        // Draw suction radius circle
         Color ringColor = Color.white;
-        if (flask.targetTypeIndex >= 0 && flask.targetTypeIndex < sim.fluidTypes.Length)
-        {
-            ringColor = sim.fluidTypes[flask.targetTypeIndex].color;
-        }
-        ringColor.a = 0.6f;
+        if (flask.targetTypeIndex >= 0 && flask.targetTypeIndex < fluidTypes.Length)
+            ringColor = fluidTypes[flask.targetTypeIndex].color;
 
+        // Outer ring
+        ringColor.a = 0.6f;
         DrawCircle(flask.FlaskWorldPos, flask.suctionRadius, ringColor, 48);
 
-        // Draw absorb radius (inner circle, more opaque)
+        // Inner ring
         ringColor.a = 0.9f;
         DrawCircle(flask.FlaskWorldPos, flask.absorbRadius, ringColor, 24);
 
@@ -196,24 +188,19 @@ public class FlaskUI : MonoBehaviour
     {
         GL.Begin(GL.LINES);
         GL.Color(color);
-
         float step = 2f * Mathf.PI / segments;
-
         for (int i = 0; i < segments; i++)
         {
             float a0 = i * step;
             float a1 = (i + 1) * step;
-
             GL.Vertex3(center.x + Mathf.Cos(a0) * radius, center.y + Mathf.Sin(a0) * radius, 0f);
             GL.Vertex3(center.x + Mathf.Cos(a1) * radius, center.y + Mathf.Sin(a1) * radius, 0f);
         }
-
         GL.End();
     }
 
     void OnDestroy()
     {
-        // Clean up textures
         if (colorTextures != null)
             foreach (var t in colorTextures)
                 if (t != null) DestroyImmediate(t);

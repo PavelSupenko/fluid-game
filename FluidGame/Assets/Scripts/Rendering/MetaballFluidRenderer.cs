@@ -71,7 +71,9 @@ public class MetaballFluidRenderer : MonoBehaviour
 
     // ─── Internals ───────────────────────────────────────────────
 
-    private FluidSimulationGPU sim;
+    private ComputeBuffer simParticleBuffer;
+    private int simParticleCount;
+    private FluidTypeDefinition[] simFluidTypes;
     private Camera cam;
     private Material splatMaterial;
     private Mesh quadMesh;
@@ -95,11 +97,25 @@ public class MetaballFluidRenderer : MonoBehaviour
     void Start()
     {
         cam = GetComponent<Camera>();
-        sim = FindObjectOfType<FluidSimulationGPU>();
+        // Find whichever simulation is active
+        var gpu = FindObjectOfType<FluidSimulationGPU>();
+        var jobs = FindObjectOfType<FluidSimulationJobs>();
 
-        if (sim == null)
+        if (gpu != null && gpu.enabled)
         {
-            Debug.LogError("[MetaballRenderer] No FluidSimulationGPU found!");
+            simParticleBuffer = gpu.ParticleBuffer;
+            simParticleCount = gpu.ParticleCount;
+            simFluidTypes = gpu.fluidTypes;
+        }
+        else if (jobs != null && jobs.enabled)
+        {
+            simParticleBuffer = jobs.ParticleBuffer;
+            simParticleCount = jobs.ParticleCount;
+            simFluidTypes = jobs.fluidTypes;
+        }
+        else
+        {
+            Debug.LogError("[MetaballRenderer] No active simulation found!");
             enabled = false;
             return;
         }
@@ -129,7 +145,7 @@ public class MetaballFluidRenderer : MonoBehaviour
 
     void LateUpdate()
     {
-        if (!showMetaballs || sim == null || sim.ParticleBuffer == null)
+        if (!showMetaballs || simParticleBuffer == null)
             return;
 
         EnsureArgsBuffer();
@@ -164,7 +180,7 @@ public class MetaballFluidRenderer : MonoBehaviour
         Matrix4x4 vp = proj * view;
 
         // Set material properties
-        splatMaterial.SetBuffer("_Particles", sim.ParticleBuffer);
+        splatMaterial.SetBuffer("_Particles", simParticleBuffer);
         splatMaterial.SetFloat("_RenderScale", splatScale);
         splatMaterial.SetFloat("_BlobSharpness", blobSharpness);
         splatMaterial.SetMatrix("_ViewProj", vp);
@@ -194,7 +210,7 @@ public class MetaballFluidRenderer : MonoBehaviour
         CompositeMaterial.SetFloat("_SolidColors", solidColors ? 1f : 0f);
 
         // Pass fluid type colors to the shader for nearest-color snapping
-        var types = sim.fluidTypes;
+        var types = simFluidTypes;
         int count = Mathf.Min(types.Length, 8); // Shader supports up to 8 types
         Vector4[] colors = new Vector4[8];
         for (int i = 0; i < count; i++)
@@ -235,17 +251,17 @@ public class MetaballFluidRenderer : MonoBehaviour
     void EnsureArgsBuffer()
     {
         if (argsReady) return;
-        if (sim.ParticleCount <= 0) return;
+        if (simParticleCount <= 0) return;
 
         args[0] = (uint)quadMesh.GetIndexCount(0);
-        args[1] = (uint)sim.ParticleCount;
+        args[1] = (uint)simParticleCount;
         args[2] = 0;
         args[3] = 0;
         args[4] = 0;
         argsBuffer.SetData(args);
         argsReady = true;
 
-        Debug.Log($"[MetaballRenderer] Args ready: {sim.ParticleCount} particles");
+        Debug.Log($"[MetaballRenderer] Args ready: {simParticleCount} particles");
     }
 
     // ─── Helpers ─────────────────────────────────────────────────

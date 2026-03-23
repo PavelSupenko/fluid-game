@@ -21,7 +21,16 @@ public class ContainerBoundsRenderer : MonoBehaviour
     {
         CreateLineMaterial();
 
-        // Try GPU sim first, then fall back to CPU sim
+        // Try Jobs sim, then GPU sim, then legacy CPU sim
+        var jobs = GetComponent<FluidSimulationJobs>();
+        if (jobs != null)
+        {
+            containerMin = jobs.containerMin;
+            containerMax = jobs.containerMax;
+            initialized = true;
+            return;
+        }
+
         var gpu = GetComponent<FluidSimulationGPU>();
         if (gpu != null)
         {

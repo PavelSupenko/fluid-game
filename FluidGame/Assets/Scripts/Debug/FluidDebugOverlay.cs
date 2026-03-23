@@ -2,27 +2,31 @@ using UnityEngine;
 
 /// <summary>
 /// Displays simulation diagnostics: particle count, FPS, and SPH density stats.
-/// Works with both FluidSimulation (CPU) and FluidSimulationGPU.
+/// Works with FluidSimulation (legacy CPU), FluidSimulationGPU, and FluidSimulationJobs.
 /// </summary>
 public class FluidDebugOverlay : MonoBehaviour
 {
-    // References — whichever one is found in the scene
-    private FluidSimulation cpuSim;
-    private FluidSimulationGPU gpuSim;
+    private FluidParticle[] particles;
+    private int particleCount;
+    private string modeName = "None";
 
     private float fps;
     private float fpsTimer;
     private float avgDensity;
     private float maxDensity;
     private float statsTimer;
-    private bool isGPU;
     private const float STATS_INTERVAL = 0.25f;
+
+    // Cached references
+    private FluidSimulationGPU gpuSim;
+    private FluidSimulationJobs jobsSim;
+    private FluidSimulation cpuSim;
 
     void Start()
     {
-        cpuSim = FindObjectOfType<FluidSimulation>();
         gpuSim = FindObjectOfType<FluidSimulationGPU>();
-        isGPU = gpuSim != null;
+        jobsSim = FindObjectOfType<FluidSimulationJobs>();
+        cpuSim = FindObjectOfType<FluidSimulation>();
     }
 
     void Update()
@@ -34,39 +38,48 @@ public class FluidDebugOverlay : MonoBehaviour
         if (statsTimer <= 0f)
         {
             statsTimer = STATS_INTERVAL;
+            RefreshParticleRef();
             ComputeDensityStats();
+        }
+    }
+
+    void RefreshParticleRef()
+    {
+        if (jobsSim != null && jobsSim.enabled && jobsSim.Particles != null)
+        {
+            particles = jobsSim.Particles;
+            particleCount = jobsSim.ParticleCount;
+            modeName = "Jobs+Burst";
+        }
+        else if (gpuSim != null && gpuSim.enabled && gpuSim.Particles != null)
+        {
+            particles = gpuSim.Particles;
+            particleCount = gpuSim.ParticleCount;
+            modeName = "GPU Compute";
+        }
+        else if (cpuSim != null && cpuSim.enabled && cpuSim.Particles != null)
+        {
+            particles = cpuSim.Particles;
+            particleCount = cpuSim.ParticleCount;
+            modeName = "CPU (legacy)";
         }
     }
 
     void ComputeDensityStats()
     {
-        FluidParticle[] particles = null;
-        int count = 0;
-
-        if (isGPU && gpuSim != null && gpuSim.Particles != null)
-        {
-            particles = gpuSim.Particles;
-            count = gpuSim.ParticleCount;
-        }
-        else if (cpuSim != null && cpuSim.Particles != null)
-        {
-            particles = cpuSim.Particles;
-            count = cpuSim.ParticleCount;
-        }
-
-        if (particles == null || count == 0) return;
+        if (particles == null || particleCount == 0) return;
 
         float sum = 0f;
         float max = 0f;
 
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < particleCount; i++)
         {
             float d = particles[i].density;
             sum += d;
             if (d > max) max = d;
         }
 
-        avgDensity = sum / count;
+        avgDensity = sum / particleCount;
         maxDensity = max;
     }
 
@@ -79,15 +92,9 @@ public class FluidDebugOverlay : MonoBehaviour
         };
         style.normal.textColor = Color.black;
 
-        int count = isGPU
-            ? (gpuSim != null ? gpuSim.ParticleCount : 0)
-            : (cpuSim != null ? cpuSim.ParticleCount : 0);
-
-        string mode = isGPU ? "GPU" : "CPU";
-
-        GUILayout.BeginArea(new Rect(10, 10, 350, 160));
-        GUILayout.Label($"Mode: {mode}", style);
-        GUILayout.Label($"Particles: {count}", style);
+        GUILayout.BeginArea(new Rect(10, 100, 350, 160));
+        GUILayout.Label($"Mode: {modeName}", style);
+        GUILayout.Label($"Particles: {particleCount}", style);
         GUILayout.Label($"FPS: {fps:F0}", style);
         GUILayout.Label($"Avg Density: {avgDensity:F1}", style);
         GUILayout.Label($"Max Density: {maxDensity:F1}", style);

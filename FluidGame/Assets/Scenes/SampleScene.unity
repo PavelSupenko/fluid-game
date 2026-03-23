@@ -374,6 +374,7 @@ GameObject:
   - component: {fileID: 1807844250}
   - component: {fileID: 1807844256}
   - component: {fileID: 1807844255}
+  - component: {fileID: 1807844260}
   - component: {fileID: 1807844254}
   - component: {fileID: 1807844257}
   - component: {fileID: 1807844259}
@@ -448,7 +449,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1807844249}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 9f2178c0de0aa98468496074e95be41d, type: 3}
   m_Name: 
@@ -544,6 +545,64 @@ MonoBehaviour:
   limitCapacity: 0
   maxCapacity: 500
   targetTypeIndex: 0
+--- !u!114 &1807844260
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1807844249}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e8b968736194a4e979f8fe680ebb2c51, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  containerMin: {x: -4, y: -3}
+  containerMax: {x: 4, y: 4}
+  gridWidth: 30
+  gridHeight: 20
+  particleSpacing: 0.15
+  particleRadius: 0.05
+  smoothingRadius: 0.4
+  particleMass: 1
+  restDensity: 50
+  autoRestDensity: 1
+  pressureStiffness: 80
+  nearPressureStiffness: 5
+  cohesionStrength: 15
+  interTypeRepulsion: 8
+  surfaceTensionStrength: 5
+  uniformFluid: 0
+  gravity: {x: 0, y: 0}
+  boundaryDamping: 0.3
+  velocityDamping: 0.98
+  timeScale: 1
+  subSteps: 3
+  maxSpeed: 8
+  fluidTypes:
+  - name: Heavy (Red)
+    color: {r: 0.9, g: 0.2, b: 0.15, a: 1}
+    density: 3
+    viscosity: 8
+    cohesion: 1
+  - name: Medium (Green)
+    color: {r: 0.2, g: 0.85, b: 0.3, a: 1}
+    density: 2
+    viscosity: 5
+    cohesion: 0.8
+  - name: Light (Blue)
+    color: {r: 0.2, g: 0.4, b: 0.95, a: 1}
+    density: 1
+    viscosity: 2
+    cohesion: 0.6
+  flaskPos:
+    x: 0
+    y: 0
+  flaskActive: 0
+  flaskTargetType: -1
+  flaskRadius: 1
+  flaskAbsorbRadius: 0.15
+  flaskStrength: 80
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
