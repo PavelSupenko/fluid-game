@@ -201,7 +201,7 @@ Camera:
   m_Enabled: 1
   serializedVersion: 2
   m_ClearFlags: 2
-  m_BackGroundColor: {r: 0.19215687, g: 0.3019608, b: 0.4745098, a: 0}
+  m_BackGroundColor: {r: 0.828841, g: 0.8954028, b: 1, a: 0}
   m_projectionMatrixMode: 1
   m_GateFitMode: 2
   m_FOVAxisMode: 0
@@ -226,7 +226,7 @@ Camera:
   far clip plane: 1000
   field of view: 34
   orthographic: 1
-  orthographic size: 5
+  orthographic size: 7.5
   m_Depth: -1
   m_CullingMask:
     serializedVersion: 2
@@ -376,6 +376,8 @@ GameObject:
   - component: {fileID: 1807844255}
   - component: {fileID: 1807844254}
   - component: {fileID: 1807844257}
+  - component: {fileID: 1807844259}
+  - component: {fileID: 1807844258}
   m_Layer: 0
   m_Name: FluidSimulation
   m_TagString: Untagged
@@ -508,6 +510,40 @@ MonoBehaviour:
   uniformDensity: 2
   uniformViscosity: 6
   uniformCohesion: 1
+--- !u!114 &1807844258
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1807844249}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6f1c65bfff40b724886ad75080cfb504, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  buttonWidth: 80
+  buttonHeight: 60
+  bottomMargin: 20
+  showSuctionRadius: 1
+--- !u!114 &1807844259
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1807844249}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f96dba152061be749a09b944f336e6e6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  suctionRadius: 1
+  absorbRadius: 0.15
+  suctionStrength: 80
+  limitCapacity: 0
+  maxCapacity: 500
+  targetTypeIndex: 0
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

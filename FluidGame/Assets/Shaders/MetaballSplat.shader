@@ -39,7 +39,7 @@ Shader "FluidSim/MetaballSplat"
                 int typeIndex;
                 float density;
                 float pressure;
-                float pad;
+                float alive;
                 float4 color;
             };
 
@@ -65,7 +65,10 @@ Shader "FluidSim/MetaballSplat"
             {
                 v2f o;
                 Particle p = _Particles[instanceID];
-                float3 worldPos = float3(p.position, 0.0) + v.vertex.xyz * _RenderScale;
+
+                // Hide absorbed particles by collapsing their quad to zero size
+                float scale = (p.alive > 0.5) ? _RenderScale : 0.0;
+                float3 worldPos = float3(p.position, 0.0) + v.vertex.xyz * scale;
                 o.pos = mul(_ViewProj, float4(worldPos, 1.0));
                 o.uv = v.uv;
                 o.color = p.color;

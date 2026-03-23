@@ -34,7 +34,7 @@ Shader "FluidSim/ParticleCircleGPU"
                 int typeIndex;      // 4
                 float density;      // 4
                 float pressure;     // 4
-                float pad;          // 4
+                float alive;        // 4
                 float4 color;       // 16
             };
 
@@ -59,11 +59,11 @@ Shader "FluidSim/ParticleCircleGPU"
             {
                 v2f o;
 
-                // Read particle data from the GPU buffer
                 Particle p = _Particles[instanceID];
 
-                // Billboard quad: offset vertex by particle position
-                float3 worldPos = float3(p.position, 0.0) + v.vertex.xyz * _RenderScale;
+                // Collapse dead particles to zero size
+                float scale = (p.alive > 0.5) ? _RenderScale : 0.0;
+                float3 worldPos = float3(p.position, 0.0) + v.vertex.xyz * scale;
 
                 o.pos = mul(UNITY_MATRIX_VP, float4(worldPos, 1.0));
                 o.uv = v.uv;

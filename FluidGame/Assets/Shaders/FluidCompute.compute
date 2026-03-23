@@ -24,7 +24,7 @@ struct Particle
     int typeIndex;      // 4
     float density;      // 4
     float pressure;     // 4
-    float pad;          // 4
+    float alive;        // 4  — 1.0 = active, 0.0 = absorbed by flask
     float4 color;       // 16
 };
 
@@ -69,6 +69,14 @@ float cohesionStrength;      // Global multiplier for same-type attraction
 float interTypeRepulsion;    // Repulsion force between different fluid types
 float surfaceTensionStrength; // Pulls surface particles inward toward same-type center of mass
 float uniformFluid;          // When > 0.5: all particles behave as one fluid (color is cosmetic only)
+
+// ─── Flask / Suction ─────────────────────────────────────────────
+float2 flaskPos;            // World position of the flask cursor
+float flaskActive;          // > 0.5 when suction is on (mouse held down)
+float flaskTargetType;      // typeIndex to absorb (-1 = absorb all)
+float flaskRadius;          // Outer radius: particles within this get pulled
+float flaskAbsorbRadius;    // Inner radius: particles within this get absorbed
+float flaskStrength;        // Strength of pull force
 
 float2 gravity;
 float2 containerMin;
@@ -148,6 +156,7 @@ void ClearGrid(uint3 id : SV_DispatchThreadID)
 void InsertParticles(uint3 id : SV_DispatchThreadID)
 {
     if ((int)id.x >= particleCount) return;
+    if (particles[id.x].alive < 0.5) return; // Skip absorbed particles
 
     float2 pos = particles[id.x].position;
     int2 cell = GetCell(pos);
@@ -172,6 +181,7 @@ void InsertParticles(uint3 id : SV_DispatchThreadID)
 void ComputeDensityPressure(uint3 id : SV_DispatchThreadID)
 {
     if ((int)id.x >= particleCount) return;
+    if (particles[id.x].alive < 0.5) return; // Skip absorbed particles
 
     float2 posI = particles[id.x].position;
     int2 cellI = GetCell(posI);
@@ -191,6 +201,7 @@ void ComputeDensityPressure(uint3 id : SV_DispatchThreadID)
             for (int s = 0; s < count; s++)
             {
                 int j = cellParticles[ci * MAX_PER_CELL + s];
+                if (particles[j].alive < 0.5) continue; // Skip absorbed
                 float2 diff = posI - particles[j].position;
                 float rSqr = dot(diff, diff);
 
@@ -217,6 +228,7 @@ void ComputeDensityPressure(uint3 id : SV_DispatchThreadID)
 void ComputeForces(uint3 id : SV_DispatchThreadID)
 {
     if ((int)id.x >= particleCount) return;
+    if (particles[id.x].alive < 0.5) return; // Skip absorbed particles
 
     Particle pI = particles[id.x];
     int2 cellI = GetCell(pI.position);
@@ -243,6 +255,7 @@ void ComputeForces(uint3 id : SV_DispatchThreadID)
             {
                 int j = cellParticles[ci * MAX_PER_CELL + s];
                 if (j == (int)id.x) continue;
+                if (particles[j].alive < 0.5) continue; // Skip absorbed
 
                 Particle pJ = particles[j];
                 float2 diff = pI.position - pJ.position;
@@ -331,19 +344,60 @@ void Integrate(uint3 id : SV_DispatchThreadID)
     if ((int)id.x >= particleCount) return;
 
     Particle p = particles[id.x];
+
+    // Skip absorbed particles — leave them at graveyard position
+    if (p.alive < 0.5)
+    {
+        particles[id.x] = p;
+        return;
+    }
+
     FluidTypeData ft = fluidTypes[p.typeIndex];
 
     // Acceleration: pressure/viscosity forces divided by density, plus gravity
-    // In uniform mode, gravity is the same for all particles (no stratification)
     float gScale = (uniformFluid > 0.5) ? 1.0 : ft.gravityScale;
     float2 accel = forces[id.x] / max(p.density, 0.001) + gravity * gScale;
 
     p.velocity += accel * dt;
 
-    // Velocity damping — dissipates energy so the fluid settles
+    // ── Flask suction ──
+    if (flaskActive > 0.5)
+    {
+        // Check if this particle's type matches the flask target
+        // flaskTargetType < 0 means absorb all types
+        bool typeMatch = (flaskTargetType < -0.5) || (abs(p.typeIndex - flaskTargetType) < 0.5);
+
+        if (typeMatch)
+        {
+            float2 toFlask = flaskPos - p.position;
+            float dist = length(toFlask);
+
+            if (dist < flaskRadius && dist > 0.001)
+            {
+                float2 dir = toFlask / dist;
+
+                // Pull force: stronger as particle gets closer to flask center
+                float pullFactor = 1.0 - dist / flaskRadius;
+                p.velocity += dir * flaskStrength * pullFactor * pullFactor * dt;
+
+                // Absorb if close enough to the flask center
+                if (dist < flaskAbsorbRadius)
+                {
+                    p.alive = 0.0;
+                    // Move to graveyard position far outside the container
+                    p.position = float2(-9999, -9999);
+                    p.velocity = float2(0, 0);
+                    particles[id.x] = p;
+                    return;
+                }
+            }
+        }
+    }
+
+    // Velocity damping
     p.velocity *= velocityDamping;
 
-    // Speed clamp to prevent numerical blow-up
+    // Speed clamp
     float speedSqr = dot(p.velocity, p.velocity);
     float maxSpeedSqr = maxSpeed * maxSpeed;
     if (speedSqr > maxSpeedSqr)

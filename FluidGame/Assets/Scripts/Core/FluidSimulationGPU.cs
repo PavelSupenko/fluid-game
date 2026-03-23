@@ -232,7 +232,7 @@ public class FluidSimulationGPU : MonoBehaviour
                     typeIndex = typeIndex,
                     density = 0f,
                     pressure = 0f,
-                    pad = 0f,
+                    alive = 1f,
                     color = fluidTypes[typeIndex].color
                 };
             }

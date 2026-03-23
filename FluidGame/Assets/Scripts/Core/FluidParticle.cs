@@ -12,7 +12,7 @@ public struct FluidParticle
     public int typeIndex;       // 4 bytes  (offset 16)
     public float density;       // 4 bytes  (offset 20)
     public float pressure;      // 4 bytes  (offset 24)
-    public float pad;           // 4 bytes  (offset 28) — alignment padding
+    public float alive;        // 4 bytes  (offset 28) — 1.0 = active, 0.0 = absorbed
     public Color color;         // 16 bytes (offset 32)
     // Total: 48 bytes
 }
