@@ -349,9 +349,9 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1807844253}
-  - component: {fileID: 1807844252}
-  - component: {fileID: 1807844251}
   - component: {fileID: 1807844250}
+  - component: {fileID: 1807844256}
+  - component: {fileID: 1807844255}
   - component: {fileID: 1807844254}
   m_Layer: 0
   m_Name: FluidSimulation
@@ -372,64 +372,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 435a54c61d50a6d4eaedb7e186887ae2, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
---- !u!114 &1807844251
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1807844249}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 339317fc4f4221746a5b0292a9fdb9bf, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  particleMaterial: {fileID: 2100000, guid: 49219b8cb7a88564396389fe433af6b0, type: 2}
-  renderScale: 0.12
---- !u!114 &1807844252
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1807844249}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 568d4933223a9ac47a487421acfe89d4, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  containerMin: {x: -4, y: -3}
-  containerMax: {x: 4, y: 4}
-  gridWidth: 30
-  gridHeight: 20
-  particleSpacing: 0.15
-  particleRadius: 0.05
-  smoothingRadius: 0.4
-  particleMass: 1
-  restDensity: 15
-  pressureStiffness: 100
-  nearPressureStiffness: 18
-  gravity: {x: 0, y: -9.81}
-  boundaryDamping: 0.3
-  timeScale: 1
-  subSteps: 3
-  maxSpeed: 15
-  fluidTypes:
-  - name: Heavy (Red)
-    color: {r: 0.9, g: 0.2, b: 0.15, a: 1}
-    density: 3
-    viscosity: 0.5
-    cohesion: 1
-  - name: Medium (Green)
-    color: {r: 0.2, g: 0.85, b: 0.3, a: 1}
-    density: 2
-    viscosity: 0.3
-    cohesion: 0.8
-  - name: Light (Blue)
-    color: {r: 0.2, g: 0.4, b: 0.95, a: 1}
-    density: 1
-    viscosity: 0.1
-    cohesion: 0.6
 --- !u!4 &1807844253
 Transform:
   m_ObjectHideFlags: 0
@@ -459,6 +401,67 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   lineColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
   inset: 0.02
+--- !u!114 &1807844255
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1807844249}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 884c2fdaccf753948b898084e94c2388, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  particleMaterial: {fileID: 2100000, guid: 7680ba8a5f9b9bf45bd4c826cfb6fa76, type: 2}
+  renderScale: 0.12
+--- !u!114 &1807844256
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1807844249}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9f2178c0de0aa98468496074e95be41d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  containerMin: {x: -4, y: -3}
+  containerMax: {x: 4, y: 4}
+  gridWidth: 30
+  gridHeight: 20
+  particleSpacing: 0.15
+  particleRadius: 0.05
+  smoothingRadius: 0.4
+  particleMass: 1
+  restDensity: 50
+  autoRestDensity: 1
+  pressureStiffness: 80
+  nearPressureStiffness: 5
+  gravity: {x: 0, y: -9.81}
+  boundaryDamping: 0.3
+  velocityDamping: 0.98
+  timeScale: 1
+  subSteps: 3
+  maxSpeed: 8
+  fluidTypes:
+  - name: Heavy (Red)
+    color: {r: 0.9, g: 0.2, b: 0.15, a: 1}
+    density: 3
+    viscosity: 8
+    cohesion: 1
+  - name: Medium (Green)
+    color: {r: 0.2, g: 0.85, b: 0.3, a: 1}
+    density: 2
+    viscosity: 5
+    cohesion: 0.8
+  - name: Light (Blue)
+    color: {r: 0.2, g: 0.4, b: 0.95, a: 1}
+    density: 1
+    viscosity: 2
+    cohesion: 0.6
+  computeShader: {fileID: 7200000, guid: 979b53e711faacb46bc449a363453f26, type: 3}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
