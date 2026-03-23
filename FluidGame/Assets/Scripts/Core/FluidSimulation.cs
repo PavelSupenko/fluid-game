@@ -93,11 +93,14 @@ public class FluidSimulation : MonoBehaviour
         ParticleCount = gridWidth * gridHeight;
         Particles = new FluidParticle[ParticleCount];
 
-        // Center the grid horizontally, place near the top of the container
+        // Center the grid horizontally.
+        // Place the top row near the top of the container,
+        // with the grid extending downward so all particles start inside bounds.
         float totalWidth = (gridWidth - 1) * particleSpacing;
         float totalHeight = (gridHeight - 1) * particleSpacing;
         float startX = -totalWidth * 0.5f;
-        float startY = containerMax.y - 0.5f;
+        float topMargin = 0.5f;
+        float startY = containerMax.y - topMargin - totalHeight;
 
         int typeCount = fluidTypes.Length;
         int rowsPerType = Mathf.Max(1, gridHeight / typeCount);

@@ -2,7 +2,9 @@ Shader "FluidSim/ParticleCircle"
 {
     Properties
     {
-        _Color ("Color", Color) = (1, 1, 1, 1)
+        // This property is overridden per-instance via MaterialPropertyBlock.
+        // Named _ParticleColor to avoid conflict with the built-in _Color property.
+        _ParticleColor ("Particle Color", Color) = (1, 1, 1, 1)
     }
 
     SubShader
@@ -42,7 +44,7 @@ Shader "FluidSim/ParticleCircle"
 
             // Per-instance color property
             UNITY_INSTANCING_BUFFER_START(Props)
-                UNITY_DEFINE_INSTANCED_PROP(float4, _Color)
+                UNITY_DEFINE_INSTANCED_PROP(float4, _ParticleColor)
             UNITY_INSTANCING_BUFFER_END(Props)
 
             v2f vert(appdata v)
@@ -67,7 +69,7 @@ Shader "FluidSim/ParticleCircle"
                 // Smooth circle edge with slight soft glow
                 float alpha = 1.0 - smoothstep(0.35, 0.5, dist);
 
-                float4 col = UNITY_ACCESS_INSTANCED_PROP(Props, _Color);
+                float4 col = UNITY_ACCESS_INSTANCED_PROP(Props, _ParticleColor);
                 col.a *= alpha;
 
                 // Discard fully transparent pixels

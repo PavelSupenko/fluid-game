@@ -24,6 +24,7 @@ public class FluidRenderer : MonoBehaviour
     private Matrix4x4[] batchMatrices;
     private Vector4[] batchColors;
     private MaterialPropertyBlock mpb;
+    private int colorPropertyId;
 
     // DrawMeshInstanced hard limit per call
     private const int BATCH_SIZE = 1023;
@@ -39,11 +40,18 @@ public class FluidRenderer : MonoBehaviour
         batchColors = new Vector4[BATCH_SIZE];
         mpb = new MaterialPropertyBlock();
 
+        // Cache the property ID — using _ParticleColor to avoid
+        // conflict with the built-in _Color property on materials
+        colorPropertyId = Shader.PropertyToID("_ParticleColor");
+
         if (particleMaterial == null)
         {
             Debug.LogError("[FluidRenderer] No particle material assigned! " +
                            "Create a material with the FluidSim/ParticleCircle shader.");
         }
+
+        // Log particle type distribution for debugging
+        LogTypeDistribution();
     }
 
     void LateUpdate()
@@ -58,7 +66,7 @@ public class FluidRenderer : MonoBehaviour
             int count = Mathf.Min(remaining, BATCH_SIZE);
             FillBatch(offset, count);
 
-            mpb.SetVectorArray("_Color", batchColors);
+            mpb.SetVectorArray(colorPropertyId, batchColors);
             Graphics.DrawMeshInstanced(
                 quadMesh, 0, particleMaterial,
                 batchMatrices, count, mpb
@@ -70,6 +78,28 @@ public class FluidRenderer : MonoBehaviour
     }
 
     // ─── Helpers ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Logs how many particles belong to each fluid type.
+    /// </summary>
+    void LogTypeDistribution()
+    {
+        if (sim.Particles == null) return;
+
+        var counts = new int[sim.fluidTypes.Length];
+        for (int i = 0; i < sim.ParticleCount; i++)
+        {
+            int t = sim.Particles[i].typeIndex;
+            if (t >= 0 && t < counts.Length) counts[t]++;
+        }
+
+        string report = "[FluidRenderer] Particle type distribution: ";
+        for (int i = 0; i < counts.Length; i++)
+        {
+            report += $"{sim.fluidTypes[i].name}={counts[i]}  ";
+        }
+        Debug.Log(report);
+    }
 
     /// <summary>
     /// Fills the pre-allocated batch arrays with transform matrices and colors.
