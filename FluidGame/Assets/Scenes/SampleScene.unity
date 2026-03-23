@@ -404,9 +404,16 @@ MonoBehaviour:
   gridHeight: 20
   particleSpacing: 0.15
   particleRadius: 0.05
+  smoothingRadius: 0.4
+  particleMass: 1
+  restDensity: 15
+  pressureStiffness: 100
+  nearPressureStiffness: 18
   gravity: {x: 0, y: -9.81}
   boundaryDamping: 0.3
   timeScale: 1
+  subSteps: 3
+  maxSpeed: 15
   fluidTypes:
   - name: Heavy (Red)
     color: {r: 0.9, g: 0.2, b: 0.15, a: 1}

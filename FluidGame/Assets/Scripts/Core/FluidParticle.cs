@@ -10,4 +10,8 @@ public struct FluidParticle
     public Vector2 velocity;
     public int typeIndex;   // Index into FluidSimulation.fluidTypes array
     public Color color;
+
+    // ─── SPH fields (computed each frame) ────────────────────────
+    public float density;       // Computed from neighbors via Poly6 kernel
+    public float pressure;      // Derived from density: k * (density - restDensity)
 }
