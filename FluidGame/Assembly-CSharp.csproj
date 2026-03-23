@@ -53,12 +53,15 @@
     <Compile Include="Assets\Scripts\Debug\ContainerBoundsRenderer.cs" />
     <Compile Include="Assets\Scripts\Debug\FluidDebugOverlay.cs" />
     <Compile Include="Assets\Scripts\Core\FluidTypeDefinition.cs" />
+    <Compile Include="Assets\Scripts\Rendering\MetaballFluidRenderer.cs" />
     <Compile Include="Assets\Scripts\Rendering\FluidRenderer.cs" />
     <Compile Include="Assets\Scripts\Rendering\FluidRendererGPU.cs" />
     <Compile Include="Assets\Scripts\Core\FluidSimulationGPU.cs" />
     <None Include="Assets\Shaders\ParticleCircleGPU.shader" />
+    <None Include="Assets\Shaders\MetaballSplat.shader" />
     <None Include="Assets\Shaders\ParticleCircle.shader" />
     <None Include="Assets\Shaders\FluidCompute.compute" />
+    <None Include="Assets\Shaders\MetaballComposite.shader" />
     <Reference Include="UnityEngine">
       <HintPath>D:\Programs\Unity Hub\Editors\6000.0.59f2\Editor\Data\Managed\UnityEngine\UnityEngine.dll</HintPath>
     </Reference>

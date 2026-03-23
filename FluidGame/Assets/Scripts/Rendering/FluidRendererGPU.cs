@@ -11,6 +11,9 @@ using UnityEngine;
 public class FluidRendererGPU : MonoBehaviour
 {
     [Header("Rendering")]
+    [Tooltip("Toggle individual particle circles on/off")]
+    public bool showParticles = true;
+
     [Tooltip("Material using the FluidSim/ParticleCircleGPU shader")]
     public Material particleMaterial;
 
@@ -57,7 +60,7 @@ public class FluidRendererGPU : MonoBehaviour
 
     void Update()
     {
-        if (particleMaterial == null) return;
+        if (!showParticles || particleMaterial == null) return;
         if (sim.ParticleBuffer == null)
         {
             // Simulation hasn't initialized yet — wait
