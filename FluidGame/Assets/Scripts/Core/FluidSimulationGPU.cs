@@ -32,6 +32,23 @@ public class FluidSimulationGPU : MonoBehaviour
     public float pressureStiffness = 80f;
     public float nearPressureStiffness = 5f;
 
+    // ─── Cohesion & Separation ───────────────────────────────────
+    [Header("Cohesion & Separation")]
+    [Tooltip("Global multiplier for same-type particle attraction. " +
+             "Per-type cohesion values in Fluid Types scale this further.")]
+    [Range(0f, 50f)]
+    public float cohesionStrength = 15f;
+
+    [Tooltip("How strongly different fluid types push apart. " +
+             "Helps colored blobs stay separated.")]
+    [Range(0f, 30f)]
+    public float interTypeRepulsion = 8f;
+
+    [Tooltip("Pulls surface particles inward toward their same-type cluster center. " +
+             "Creates rounder blob shapes.")]
+    [Range(0f, 30f)]
+    public float surfaceTensionStrength = 5f;
+
     // ─── Physics ─────────────────────────────────────────────────
     [Header("Physics")]
     public Vector2 gravity = new Vector2(0f, -9.81f);
@@ -399,6 +416,9 @@ public class FluidSimulationGPU : MonoBehaviour
         computeShader.SetFloat("maxSpeed", maxSpeed);
         computeShader.SetFloat("boundaryDamping", boundaryDamping);
         computeShader.SetVector("gravity", gravity);
+        computeShader.SetFloat("cohesionStrength", cohesionStrength);
+        computeShader.SetFloat("interTypeRepulsion", interTypeRepulsion);
+        computeShader.SetFloat("surfaceTensionStrength", surfaceTensionStrength);
     }
 
     // ─── Simulation Dispatch ─────────────────────────────────────

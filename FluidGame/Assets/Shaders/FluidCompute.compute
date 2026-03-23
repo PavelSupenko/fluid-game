@@ -65,6 +65,9 @@ float nearPressureStiffness;
 float velocityDamping;
 float maxSpeed;
 float dt;
+float cohesionStrength;      // Global multiplier for same-type attraction
+float interTypeRepulsion;    // Repulsion force between different fluid types
+float surfaceTensionStrength; // Pulls surface particles inward toward same-type center of mass
 
 float2 gravity;
 float2 containerMin;
@@ -207,7 +210,7 @@ void ComputeDensityPressure(uint3 id : SV_DispatchThreadID)
     particles[id.x] = p;
 }
 
-// ─── Kernel 3: Compute Forces (Pressure + Viscosity) ─────────────
+// ─── Kernel 3: Compute Forces (Pressure + Viscosity + Cohesion) ──
 
 [numthreads(THREAD_GROUP_SIZE, 1, 1)]
 void ComputeForces(uint3 id : SV_DispatchThreadID)
@@ -219,6 +222,11 @@ void ComputeForces(uint3 id : SV_DispatchThreadID)
     float2 totalForce = float2(0, 0);
 
     FluidTypeData typeI = fluidTypes[pI.typeIndex];
+
+    // Surface tension: track center of mass of same-type neighbors
+    // to pull surface particles inward toward their cluster
+    float2 sameTypeCOM = float2(0, 0);
+    float sameTypeWeight = 0.0;
 
     for (int dx = -1; dx <= 1; dx++)
     {
@@ -254,16 +262,62 @@ void ComputeForces(uint3 id : SV_DispatchThreadID)
                 float2 nearForce = dir * (nearPressureStiffness * nearFactor * nearFactor);
 
                 // ── Viscosity (Laplacian kernel) ──
-                // Smooths velocity differences between neighbors → creates viscous drag.
-                // Uses average viscosity of both particle types.
                 FluidTypeData typeJ = fluidTypes[pJ.typeIndex];
                 float mu = (typeI.viscosity + typeJ.viscosity) * 0.5;
                 float viscLapl = ViscLaplacian(r);
                 float2 viscForce = mu * particleMass * (pJ.velocity - pI.velocity)
                                    / max(pJ.density, 0.001) * viscLapl;
 
-                totalForce += pressForce + nearForce + viscForce;
+                bool sameType = (pI.typeIndex == pJ.typeIndex);
+
+                // ── Cohesion: same-type attraction ──
+                // Smooth attraction that peaks at ~0.6h and fades at 0 and h.
+                // This creates clusters without destabilizing close particles.
+                float2 cohesionForce = float2(0, 0);
+                if (sameType)
+                {
+                    float t = r / smoothingRadius; // normalized distance [0, 1]
+                    // Bell-shaped profile: strong in middle range, zero at extremes
+                    float attraction = t * (1.0 - t) * (1.0 - t);
+                    float cohesionCoeff = typeI.cohesion * cohesionStrength;
+                    cohesionForce = -dir * cohesionCoeff * attraction;
+
+                    // Accumulate center of mass for surface tension
+                    float w = 1.0 - t;
+                    sameTypeCOM += pJ.position * w;
+                    sameTypeWeight += w;
+                }
+
+                // ── Inter-type repulsion ──
+                // Gentle push between different types to help them separate.
+                // Uses the same near-range profile as near-pressure.
+                float2 repulsionForce = float2(0, 0);
+                if (!sameType)
+                {
+                    float repFactor = 1.0 - r / smoothingRadius;
+                    repulsionForce = dir * interTypeRepulsion * repFactor * repFactor;
+                }
+
+                totalForce += pressForce + nearForce + viscForce
+                            + cohesionForce + repulsionForce;
             }
+        }
+    }
+
+    // ── Surface tension: pull toward center of same-type neighbors ──
+    // Particles at the edge of a cluster have fewer same-type neighbors
+    // and experience stronger pull toward the cluster center, creating
+    // a surface-tension-like effect that keeps blobs compact.
+    if (sameTypeWeight > 0.001)
+    {
+        float2 com = sameTypeCOM / sameTypeWeight;
+        float2 toCOM = com - pI.position;
+        float distToCOM = length(toCOM);
+        if (distToCOM > 0.001)
+        {
+            totalForce += (toCOM / distToCOM)
+                        * surfaceTensionStrength * typeI.cohesion
+                        * min(distToCOM, smoothingRadius);
         }
     }
 
