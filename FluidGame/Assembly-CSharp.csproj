@@ -46,11 +46,13 @@
     <Analyzer Include="D:\Programs\Unity Hub\Editors\6000.0.59f2\Editor\Data\Tools\Unity.SourceGenerators\Unity.UIToolkit.SourceGenerator.dll" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Assets\Scripts\Core\ColorQuantizer.cs" />
     <Compile Include="Assets\Scripts\Core\SPHKernels.cs" />
     <Compile Include="Assets\Scripts\Rendering\MetaballCompositeFeature.cs" />
     <Compile Include="Assets\Scripts\Core\FluidParticle.cs" />
     <Compile Include="Assets\Scripts\Core\FluidSimulation.cs" />
     <Compile Include="Assets\Scripts\Core\SpatialHash.cs" />
+    <Compile Include="Assets\Scripts\Core\ImageToFluid.cs" />
     <Compile Include="Assets\Scripts\Debug\ContainerBoundsRenderer.cs" />
     <Compile Include="Assets\Scripts\Debug\FluidDebugOverlay.cs" />
     <Compile Include="Assets\Scripts\Core\FluidTypeDefinition.cs" />

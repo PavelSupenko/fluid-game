@@ -151,7 +151,17 @@ public class FluidSimulationGPU : MonoBehaviour
             return;
         }
 
-        SpawnParticles();
+        // Check if ImageToFluid provides particle data
+        var imageSource = GetComponent<ImageToFluid>();
+        if (imageSource != null && imageSource.IsReady)
+        {
+            InitFromImage(imageSource);
+        }
+        else
+        {
+            SpawnParticles();
+        }
+
         InitGPU();
     }
 
@@ -225,6 +235,21 @@ public class FluidSimulationGPU : MonoBehaviour
 
         Debug.Log($"[FluidSimGPU] Spawned {ParticleCount} particles " +
                   $"({gridWidth}x{gridHeight}), {typeCount} fluid types");
+    }
+
+    /// <summary>
+    /// Initializes particles and fluid types from an ImageToFluid component.
+    /// Replaces the default grid spawn with image-derived particle data.
+    /// </summary>
+    void InitFromImage(ImageToFluid source)
+    {
+        Particles = source.GeneratedParticles;
+        ParticleCount = source.GeneratedParticleCount;
+        fluidTypes = source.GeneratedFluidTypes;
+        particleSpacing = source.ComputedSpacing;
+
+        Debug.Log($"[FluidSimGPU] Initialized from image: {ParticleCount} particles, " +
+                  $"{fluidTypes.Length} fluid types, spacing={particleSpacing:F4}");
     }
 
     void InitGPU()

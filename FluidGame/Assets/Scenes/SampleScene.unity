@@ -269,11 +269,11 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 935a88b7aaf14bb4ca2342047847414e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  showMetaballs: 1
+  showMetaballs: 0
   splatScale: 0.35
   blobSharpness: 3
   resolutionScale: 0.75
-  solidColors: 1
+  solidColors: 0
   threshold: 0.35
   edgeSoftness: 0.05
   edgeHighlight: -0.15
@@ -375,6 +375,7 @@ GameObject:
   - component: {fileID: 1807844256}
   - component: {fileID: 1807844255}
   - component: {fileID: 1807844254}
+  - component: {fileID: 1807844257}
   m_Layer: 0
   m_Name: FluidSimulation
   m_TagString: Untagged
@@ -435,7 +436,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 884c2fdaccf753948b898084e94c2388, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  showParticles: 0
+  showParticles: 1
   particleMaterial: {fileID: 2100000, guid: 7680ba8a5f9b9bf45bd4c826cfb6fa76, type: 2}
   renderScale: 0.12
 --- !u!114 &1807844256
@@ -465,7 +466,7 @@ MonoBehaviour:
   cohesionStrength: 15
   interTypeRepulsion: 8
   surfaceTensionStrength: 5
-  gravity: {x: 0, y: -9.81}
+  gravity: {x: 0, y: 0}
   boundaryDamping: 0.3
   velocityDamping: 0.98
   timeScale: 1
@@ -488,6 +489,24 @@ MonoBehaviour:
     viscosity: 2
     cohesion: 0.6
   computeShader: {fileID: 7200000, guid: 979b53e711faacb46bc449a363453f26, type: 3}
+--- !u!114 &1807844257
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1807844249}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e04a0d207ff48bc40883298ba5010870, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  sourceImage: {fileID: 2800000, guid: 11f59c4643cc3334994b5009abd2bec6, type: 3}
+  targetColorCount: 8
+  resolution: 200
+  uniformDensity: 2
+  uniformViscosity: 6
+  uniformCohesion: 1
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
