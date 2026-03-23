@@ -56,7 +56,7 @@ public class ImageToFluid : MonoBehaviour
 
     // ─── Lifecycle ───────────────────────────────────────────────
 
-    void Awake()
+    public void TryParseImage()
     {
         if (sourceImage == null)
         {

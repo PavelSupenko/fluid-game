@@ -77,7 +77,7 @@ public class FluidDebugOverlay : MonoBehaviour
             fontSize = 16,
             fontStyle = FontStyle.Bold
         };
-        style.normal.textColor = Color.white;
+        style.normal.textColor = Color.black;
 
         int count = isGPU
             ? (gpuSim != null ? gpuSim.ParticleCount : 0)

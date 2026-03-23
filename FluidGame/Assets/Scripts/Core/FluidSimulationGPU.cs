@@ -158,6 +158,11 @@ public class FluidSimulationGPU : MonoBehaviour
 
         // Check if ImageToFluid provides particle data
         var imageSource = GetComponent<ImageToFluid>();
+        if (imageSource != null)
+        {
+            imageSource.TryParseImage();
+        }
+        
         if (imageSource != null && imageSource.IsReady)
         {
             InitFromImage(imageSource);
