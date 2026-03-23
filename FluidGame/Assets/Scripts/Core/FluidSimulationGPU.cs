@@ -49,6 +49,11 @@ public class FluidSimulationGPU : MonoBehaviour
     [Range(0f, 30f)]
     public float surfaceTensionStrength = 5f;
 
+    [Tooltip("When ON, all particles behave as one fluid regardless of color/type. " +
+             "Cohesion applies to all neighbors, inter-type repulsion is disabled, " +
+             "gravity is uniform. Color is purely visual. Auto-enabled for image mode.")]
+    public bool uniformFluid = false;
+
     // ─── Physics ─────────────────────────────────────────────────
     [Header("Physics")]
     public Vector2 gravity = new Vector2(0f, -9.81f);
@@ -240,6 +245,8 @@ public class FluidSimulationGPU : MonoBehaviour
     /// <summary>
     /// Initializes particles and fluid types from an ImageToFluid component.
     /// Replaces the default grid spawn with image-derived particle data.
+    /// Also auto-scales SPH parameters to match the actual particle spacing,
+    /// which can be very different from the default grid spacing.
     /// </summary>
     void InitFromImage(ImageToFluid source)
     {
@@ -248,8 +255,27 @@ public class FluidSimulationGPU : MonoBehaviour
         fluidTypes = source.GeneratedFluidTypes;
         particleSpacing = source.ComputedSpacing;
 
+        // Image mode: all types have uniform physics, color is cosmetic.
+        uniformFluid = true;
+
+        // ── Auto-scale SPH parameters to match particle spacing ──
+        // The smoothing radius must be proportional to particle spacing.
+        // Too large → too many neighbors, high density, slow.
+        // Too small → particles don't see each other, no fluid behavior.
+        float s = particleSpacing;
+        smoothingRadius = s * 2.5f;
+        particleRadius = s * 0.4f;
+
+        // Near-pressure needs to be strong enough to prevent overlap even under gravity.
+        nearPressureStiffness = 10f;
+        pressureStiffness = 120f;
+
+        // More sub-steps for stability with densely packed image particles
+        subSteps = Mathf.Max(subSteps, 4);
+
         Debug.Log($"[FluidSimGPU] Initialized from image: {ParticleCount} particles, " +
-                  $"{fluidTypes.Length} fluid types, spacing={particleSpacing:F4}");
+                  $"{fluidTypes.Length} types, spacing={s:F4}, " +
+                  $"smoothingRadius={smoothingRadius:F4}, uniformFluid=ON");
     }
 
     void InitGPU()
@@ -349,55 +375,67 @@ public class FluidSimulationGPU : MonoBehaviour
     }
 
     /// <summary>
-    /// Measures density of center particles in their initial arrangement
+    /// Measures density of particles near the center of the particle field
     /// to set a matching rest density, preventing the initial explosion.
-    /// Done on CPU before first GPU frame.
+    /// Works with any particle layout (grid or image-derived).
     /// </summary>
     void CalibrateRestDensity()
     {
         float h = smoothingRadius;
         float hSqr = h * h;
-        float h2 = h * h;
-        float h8 = h2 * h2 * h2 * h2;
+        float h8 = hSqr * hSqr * hSqr * hSqr;
         float coeff = 4f / (Mathf.PI * h8);
 
+        // Find the bounding box center of all particles
+        Vector2 minPos = new Vector2(float.MaxValue, float.MaxValue);
+        Vector2 maxPos = new Vector2(float.MinValue, float.MinValue);
+        for (int i = 0; i < ParticleCount; i++)
+        {
+            Vector2 p = Particles[i].position;
+            if (p.x < minPos.x) minPos.x = p.x;
+            if (p.y < minPos.y) minPos.y = p.y;
+            if (p.x > maxPos.x) maxPos.x = p.x;
+            if (p.y > maxPos.y) maxPos.y = p.y;
+        }
+        Vector2 center = (minPos + maxPos) * 0.5f;
+        float sampleRadius = Mathf.Min(maxPos.x - minPos.x, maxPos.y - minPos.y) * 0.25f;
+        float sampleRadiusSqr = sampleRadius * sampleRadius;
+
+        // Sample particles near the center where they have the most neighbors
         float totalDensity = 0f;
         int sampleCount = 0;
 
-        int startRow = gridHeight / 4;
-        int endRow = gridHeight * 3 / 4;
-        int startCol = gridWidth / 4;
-        int endCol = gridWidth * 3 / 4;
-
-        for (int y = startRow; y < endRow; y++)
+        for (int i = 0; i < ParticleCount; i++)
         {
-            for (int x = startCol; x < endCol; x++)
+            Vector2 toCenter = Particles[i].position - center;
+            if (toCenter.sqrMagnitude > sampleRadiusSqr) continue;
+
+            float density = 0f;
+
+            for (int j = 0; j < ParticleCount; j++)
             {
-                int i = y * gridWidth + x;
-                if (i >= ParticleCount) continue;
-
-                float density = 0f;
-
-                // Brute-force neighbor check (only at init, so it's fine)
-                for (int j = 0; j < ParticleCount; j++)
+                Vector2 diff = Particles[i].position - Particles[j].position;
+                float rSqr = diff.sqrMagnitude;
+                if (rSqr < hSqr)
                 {
-                    Vector2 diff = Particles[i].position - Particles[j].position;
-                    float rSqr = diff.sqrMagnitude;
-                    if (rSqr < hSqr)
-                    {
-                        float d = hSqr - rSqr;
-                        density += particleMass * coeff * d * d * d;
-                    }
+                    float d = hSqr - rSqr;
+                    density += particleMass * coeff * d * d * d;
                 }
-
-                totalDensity += density;
-                sampleCount++;
             }
+
+            totalDensity += density;
+            sampleCount++;
+
+            // Limit samples to keep init time reasonable for large particle counts
+            if (sampleCount >= 200) break;
         }
 
         if (sampleCount > 0)
         {
-            restDensity = (totalDensity / sampleCount) * 0.95f;
+            // In uniform/image mode, use exact measured density to prevent inflation.
+            // In multi-type mode, use 95% to give slight expansion room.
+            float multiplier = uniformFluid ? 1.0f : 0.95f;
+            restDensity = (totalDensity / sampleCount) * multiplier;
         }
 
         Debug.Log($"[FluidSimGPU] Auto-calibrated restDensity = {restDensity:F1} " +
@@ -444,6 +482,7 @@ public class FluidSimulationGPU : MonoBehaviour
         computeShader.SetFloat("cohesionStrength", cohesionStrength);
         computeShader.SetFloat("interTypeRepulsion", interTypeRepulsion);
         computeShader.SetFloat("surfaceTensionStrength", surfaceTensionStrength);
+        computeShader.SetFloat("uniformFluid", uniformFluid ? 1f : 0f);
     }
 
     // ─── Simulation Dispatch ─────────────────────────────────────

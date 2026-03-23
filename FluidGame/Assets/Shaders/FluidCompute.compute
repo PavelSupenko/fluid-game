@@ -68,6 +68,7 @@ float dt;
 float cohesionStrength;      // Global multiplier for same-type attraction
 float interTypeRepulsion;    // Repulsion force between different fluid types
 float surfaceTensionStrength; // Pulls surface particles inward toward same-type center of mass
+float uniformFluid;          // When > 0.5: all particles behave as one fluid (color is cosmetic only)
 
 float2 gravity;
 float2 containerMin;
@@ -268,29 +269,27 @@ void ComputeForces(uint3 id : SV_DispatchThreadID)
                 float2 viscForce = mu * particleMass * (pJ.velocity - pI.velocity)
                                    / max(pJ.density, 0.001) * viscLapl;
 
-                bool sameType = (pI.typeIndex == pJ.typeIndex);
+                // When uniformFluid is on, treat all particles as same type
+                // (color is purely visual, physics ignores typeIndex)
+                bool sameType = (uniformFluid > 0.5) || (pI.typeIndex == pJ.typeIndex);
 
                 // ── Cohesion: same-type attraction ──
-                // Smooth attraction that peaks at ~0.6h and fades at 0 and h.
-                // This creates clusters without destabilizing close particles.
+                // In uniform mode this applies to ALL neighbors, holding the fluid together.
                 float2 cohesionForce = float2(0, 0);
                 if (sameType)
                 {
-                    float t = r / smoothingRadius; // normalized distance [0, 1]
-                    // Bell-shaped profile: strong in middle range, zero at extremes
+                    float t = r / smoothingRadius;
                     float attraction = t * (1.0 - t) * (1.0 - t);
                     float cohesionCoeff = typeI.cohesion * cohesionStrength;
                     cohesionForce = -dir * cohesionCoeff * attraction;
 
-                    // Accumulate center of mass for surface tension
                     float w = 1.0 - t;
                     sameTypeCOM += pJ.position * w;
                     sameTypeWeight += w;
                 }
 
                 // ── Inter-type repulsion ──
-                // Gentle push between different types to help them separate.
-                // Uses the same near-range profile as near-pressure.
+                // Disabled entirely in uniform mode (sameType is always true).
                 float2 repulsionForce = float2(0, 0);
                 if (!sameType)
                 {
@@ -335,8 +334,9 @@ void Integrate(uint3 id : SV_DispatchThreadID)
     FluidTypeData ft = fluidTypes[p.typeIndex];
 
     // Acceleration: pressure/viscosity forces divided by density, plus gravity
-    // Gravity is scaled per fluid type — heavier types sink, lighter float up
-    float2 accel = forces[id.x] / max(p.density, 0.001) + gravity * ft.gravityScale;
+    // In uniform mode, gravity is the same for all particles (no stratification)
+    float gScale = (uniformFluid > 0.5) ? 1.0 : ft.gravityScale;
+    float2 accel = forces[id.x] / max(p.density, 0.001) + gravity * gScale;
 
     p.velocity += accel * dt;
 
