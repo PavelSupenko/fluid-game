@@ -228,8 +228,8 @@ public class FluidSimulationJobs : MonoBehaviour
         ParticleCount = source.GeneratedParticleCount;
         fluidTypes = source.GeneratedFluidTypes;
         particleSpacing = source.ComputedSpacing;
-        uniformFluid = true;
-        startSleeping = true; // Image particles start asleep
+        uniformFluid = false; // Type-aware: cohesion by color, inter-type repulsion
+        startSleeping = true;
 
         float s = particleSpacing;
         smoothingRadius = s * 2.5f;
@@ -239,8 +239,13 @@ public class FluidSimulationJobs : MonoBehaviour
         subSteps = Mathf.Max(subSteps, 4);
         wakeRadius = smoothingRadius * 4f;
 
+        // Mercury-like behavior: same-type particles clump, different types separate
+        cohesionStrength = 20f;          // Strong same-type attraction (mercury clumping)
+        interTypeRepulsion = 12f;        // Different colors push apart (immiscible)
+        surfaceTensionStrength = 8f;     // Droplets stay round, not flat
+
         Debug.Log($"[FluidSimJobs] From image: {ParticleCount} particles, " +
-                  $"spacing={s:F4}, h={smoothingRadius:F4}");
+                  $"spacing={s:F4}, h={smoothingRadius:F4}, mercury mode");
     }
 
     void InitNativeData()
@@ -729,6 +734,7 @@ public class FluidSimulationJobs : MonoBehaviour
             nearPressureStiffness = nearPressureStiffness,
             cohesionStrength = cohesionStrength,
             interTypeRepulsion = interTypeRepulsion,
+            surfaceTensionStrength = surfaceTensionStrength,
             uniformFluid = uniformFluid,
             spikyGradCoeff = -10f / (math.PI * math.pow(smoothingRadius, 5)),
             viscLaplCoeff = 40f / (math.PI * math.pow(smoothingRadius, 5))
@@ -975,7 +981,8 @@ public class FluidSimulationJobs : MonoBehaviour
         public int gridW, gridH;
         public float nearPressureStiffness;
         public float cohesionStrength;
-        public float interTypeRepulsion;  // Mild push between different colors
+        public float interTypeRepulsion;
+        public float surfaceTensionStrength;
         public bool uniformFluid;
         public float spikyGradCoeff, viscLaplCoeff;
 
@@ -994,6 +1001,10 @@ public class FluidSimulationJobs : MonoBehaviour
             var typeI = fluidTypeData[pI.typeIndex];
 
             float2 totalForce = float2.zero;
+
+            // Surface tension tracking: center of mass of same-type neighbors
+            float2 sameTypeCOM = float2.zero;
+            float sameTypeWeight = 0f;
 
             for (int dx = -1; dx <= 1; dx++)
             for (int dy = -1; dy <= 1; dy++)
@@ -1022,35 +1033,40 @@ public class FluidSimulationJobs : MonoBehaviour
 
                     float densityJ = math.max(densities[j], 0.001f);
 
-                    // Pressure — uniform (all particles repel equally for stability)
+                    // Pressure — all particles repel equally for stability
                     float gm = SpikyGrad(r);
                     float pressAvg = (pressures[i] + pressures[j]) * 0.5f;
                     float2 pF = dir * (-particleMass * pressAvg * gm / densityJ);
 
-                    // Near-pressure — uniform
+                    // Near-pressure repulsion
                     float nf = 1f - r / smoothingRadius;
                     float2 nF = dir * (nearPressureStiffness * nf * nf);
 
-                    // Viscosity — uniform (smooths velocity)
+                    // Viscosity — smooths velocity differences
                     var typeJ = fluidTypeData[pJ.typeIndex];
                     float mu = (typeI.viscosity + typeJ.viscosity) * 0.5f;
                     float vl = ViscLapl(r);
                     float2 vF = mu * particleMass * (pJ.velocity - pI.velocity)
                               / densityJ * vl;
 
-                    // Cohesion — SAME TYPE ONLY: same-colored particles attract.
-                    // This makes each color behave as a distinct fluid that clumps together.
-                    float2 cF = float2.zero;
                     bool sameType = (pI.typeIndex == pJ.typeIndex);
 
+                    // Cohesion — SAME TYPE ONLY: same-colored particles attract
+                    // This creates "mercury droplet" behavior for each color
+                    float2 cF = float2.zero;
                     if (sameType)
                     {
                         float t = r / smoothingRadius;
                         cF = -dir * typeI.cohesion * cohesionStrength * t * (1f - t) * (1f - t);
+
+                        // Track center of mass for surface tension
+                        float w = 1f - t;
+                        sameTypeCOM += pJ.position * w;
+                        sameTypeWeight += w;
                     }
 
-                    // Inter-type repulsion — DIFFERENT TYPES ONLY: mild push apart.
-                    // Helps colors stay separated into clean blobs instead of mixing.
+                    // Inter-type repulsion — DIFFERENT TYPES: pushes apart
+                    // Creates immiscible boundaries between colors
                     float2 rF = float2.zero;
                     if (!sameType && interTypeRepulsion > 0f)
                     {
@@ -1059,6 +1075,20 @@ public class FluidSimulationJobs : MonoBehaviour
                     }
 
                     totalForce += pF + nF + vF + cF + rF;
+                }
+            }
+
+            // Surface tension — pulls particle toward center of same-type neighbors
+            // This is what makes droplets round (like mercury) instead of spreading flat
+            if (sameTypeWeight > 0.001f && surfaceTensionStrength > 0f)
+            {
+                float2 com = sameTypeCOM / sameTypeWeight;
+                float2 toCOM = com - pI.position;
+                float distCOM = math.length(toCOM);
+                if (distCOM > 0.001f)
+                {
+                    totalForce += (toCOM / distCOM) * surfaceTensionStrength * typeI.cohesion
+                                * math.min(distCOM, smoothingRadius);
                 }
             }
 

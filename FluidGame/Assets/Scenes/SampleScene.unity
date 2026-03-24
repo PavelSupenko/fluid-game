@@ -518,9 +518,9 @@ MonoBehaviour:
   autoRestDensity: 1
   pressureStiffness: 80
   nearPressureStiffness: 5
-  cohesionStrength: 15
-  interTypeRepulsion: 8
-  surfaceTensionStrength: 5
+  cohesionStrength: 20
+  interTypeRepulsion: 12
+  surfaceTensionStrength: 8
   uniformFluid: 0
   gravity: {x: 0, y: -3}
   boundaryDamping: 0.3
