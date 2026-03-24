@@ -440,7 +440,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   showParticles: 1
   particleMaterial: {fileID: 2100000, guid: 7680ba8a5f9b9bf45bd4c826cfb6fa76, type: 2}
-  renderScale: 0.12
+  renderScale: 0.0469
 --- !u!114 &1807844257
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -522,16 +522,18 @@ MonoBehaviour:
   interTypeRepulsion: 15
   surfaceTensionStrength: 10
   uniformFluid: 0
+  collisionRadiusFactor: 1
+  collisionPushStrength: 1
   gravity: {x: 0, y: -9.81}
   boundaryDamping: 0.3
   velocityDamping: 0.98
   timeScale: 1.3
   subSteps: 3
   maxSpeed: 0.4
-  sleepVelocityThreshold: 0.12
-  sleepFramesRequired: 30
-  wakeBudgetPerFrame: 80
-  wakeRadius: 1.5
+  sleepVelocityThreshold: 0.15
+  sleepFramesRequired: 20
+  wakeBudgetPerFrame: 70
+  wakeRadius: 1.3
   startSleeping: 1
   fluidTypes:
   - name: Heavy (Red)

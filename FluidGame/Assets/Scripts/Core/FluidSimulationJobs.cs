@@ -47,6 +47,18 @@ public class FluidSimulationJobs : MonoBehaviour
     public float surfaceTensionStrength = 5f;
     public bool uniformFluid = false;
 
+    // ─── Particle Collision ────────────────────────────────────────
+    [Header("Particle Collision")]
+    [Tooltip("Minimum distance between particles as a factor of particleSpacing. " +
+             "0.8 = particles can't get closer than 80% of their initial spacing.")]
+    [Range(0.3f, 1.0f)]
+    public float collisionRadiusFactor = 0.75f;
+
+    [Tooltip("How strongly overlapping particles push apart. " +
+             "Higher = more rigid, prevents compression. Lower = softer.")]
+    [Range(0.1f, 1.0f)]
+    public float collisionPushStrength = 0.5f;
+
     // ─── Physics ─────────────────────────────────────────────────
     [Header("Physics")]
     public Vector2 gravity = new Vector2(0f, -9.81f);
@@ -108,6 +120,7 @@ public class FluidSimulationJobs : MonoBehaviour
     private NativeArray<float> densities;
     private NativeArray<float> pressures;
     private NativeArray<FluidTypeGPU> fluidTypeData;
+    private NativeArray<float2> collisionCorrections;
 
     // Sleep state (separate arrays to keep ParticleData at 48 bytes for GPU)
     private NativeArray<int> sleepState;     // 0 = awake, 1 = sleeping
@@ -261,6 +274,7 @@ public class FluidSimulationJobs : MonoBehaviour
         forces = new NativeArray<float2>(ParticleCount, Allocator.Persistent);
         densities = new NativeArray<float>(ParticleCount, Allocator.Persistent);
         pressures = new NativeArray<float>(ParticleCount, Allocator.Persistent);
+        collisionCorrections = new NativeArray<float2>(ParticleCount, Allocator.Persistent);
         sleepState = new NativeArray<int>(ParticleCount, Allocator.Persistent);
         sleepCounter = new NativeArray<int>(ParticleCount, Allocator.Persistent);
 
@@ -767,7 +781,31 @@ public class FluidSimulationJobs : MonoBehaviour
         };
         integrateJob.Schedule(ParticleCount, 128).Complete();
 
-        // 5. Sleep check — awake particles with low velocity go to sleep
+        // 5. Particle collision — compute corrections into separate array
+        new ParticleCollisionJob
+        {
+            particles = particles,
+            sleepState = sleepState,
+            sortedIndices = sortedIndices,
+            cellCounts = cellCounts,
+            cellOffsets = cellOffsets,
+            collisionCorrections = collisionCorrections,
+            cellSize = cellSize,
+            containerMin = new float2(containerMin.x, containerMin.y),
+            gridW = hashGridW, gridH = hashGridH,
+            minDistance = particleSpacing * collisionRadiusFactor,
+            pushStrength = collisionPushStrength
+        }.Schedule(ParticleCount, 128).Complete();
+
+        // Apply corrections to positions (safe — each thread writes only its own index)
+        new ApplyCollisionJob
+        {
+            particles = particles,
+            collisionCorrections = collisionCorrections,
+            sleepState = sleepState
+        }.Schedule(ParticleCount, 256).Complete();
+
+        // 6. Sleep check — awake particles with low velocity go to sleep
         var sleepJob = new SleepCheckJob
         {
             particles = particles,
@@ -809,6 +847,7 @@ public class FluidSimulationJobs : MonoBehaviour
         if (forces.IsCreated) forces.Dispose();
         if (densities.IsCreated) densities.Dispose();
         if (pressures.IsCreated) pressures.Dispose();
+        if (collisionCorrections.IsCreated) collisionCorrections.Dispose();
         if (sleepState.IsCreated) sleepState.Dispose();
         if (sleepCounter.IsCreated) sleepCounter.Dispose();
         if (cellCounts.IsCreated) cellCounts.Dispose();
@@ -1180,6 +1219,100 @@ public class FluidSimulationJobs : MonoBehaviour
             if (p.position.y < containerMin.y + r) { p.position.y = containerMin.y + r; p.velocity.y *= -boundaryDamping; }
             else if (p.position.y > containerMax.y - r) { p.position.y = containerMax.y - r; p.velocity.y *= -boundaryDamping; }
 
+            particles[i] = p;
+        }
+    }
+
+    // ─── Particle collision (parallel) ───────────────────────────
+    // Enforces minimum distance between particles using spatial hash.
+    // Unlike SPH pressure (which is soft), this is a hard position correction:
+    // if two particles overlap, they are pushed apart directly.
+    // Sleeping particles act as immovable walls — only awake particles move.
+
+    [BurstCompile]
+    struct ParticleCollisionJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<ParticleData> particles;
+        [ReadOnly] public NativeArray<int> sleepState;
+        [ReadOnly] public NativeArray<int> sortedIndices;
+        [ReadOnly] public NativeArray<int> cellCounts;
+        [ReadOnly] public NativeArray<int> cellOffsets;
+        [NativeDisableParallelForRestriction]
+        public NativeArray<float2> collisionCorrections; // Output: per-particle push
+        public float cellSize;
+        public float2 containerMin;
+        public int gridW, gridH;
+        public float minDistance;
+        public float pushStrength;
+
+        public void Execute(int i)
+        {
+            if (particles[i].alive < 0.5f || sleepState[i] == 1)
+            {
+                collisionCorrections[i] = float2.zero;
+                return;
+            }
+
+            float2 posI = particles[i].position;
+            float minDistSqr = minDistance * minDistance;
+            int2 cellI = math.clamp(
+                (int2)math.floor((posI - containerMin) / cellSize),
+                int2.zero, new int2(gridW - 1, gridH - 1));
+
+            float2 totalPush = float2.zero;
+            int pushCount = 0;
+
+            for (int dx = -1; dx <= 1; dx++)
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                int2 nc = cellI + new int2(dx, dy);
+                if (nc.x < 0 || nc.x >= gridW || nc.y < 0 || nc.y >= gridH) continue;
+
+                int ci = nc.y * gridW + nc.x;
+                int start = cellOffsets[ci];
+                int count = cellCounts[ci];
+
+                for (int s = 0; s < count; s++)
+                {
+                    int j = sortedIndices[start + s];
+                    if (j == i) continue;
+                    if (particles[j].alive < 0.5f) continue;
+
+                    float2 diff = posI - particles[j].position;
+                    float distSqr = math.lengthsq(diff);
+
+                    if (distSqr < minDistSqr && distSqr > 1e-12f)
+                    {
+                        float dist = math.sqrt(distSqr);
+                        float overlap = minDistance - dist;
+                        float2 dir = diff / dist;
+                        totalPush += dir * overlap * pushStrength;
+                        pushCount++;
+                    }
+                }
+            }
+
+            collisionCorrections[i] = (pushCount > 0) ? totalPush / pushCount : float2.zero;
+        }
+    }
+
+    // Apply collision corrections to particle positions (parallel, safe)
+    [BurstCompile]
+    struct ApplyCollisionJob : IJobParallelFor
+    {
+        public NativeArray<ParticleData> particles;
+        [ReadOnly] public NativeArray<float2> collisionCorrections;
+        [ReadOnly] public NativeArray<int> sleepState;
+
+        public void Execute(int i)
+        {
+            if (particles[i].alive < 0.5f || sleepState[i] == 1) return;
+
+            float2 corr = collisionCorrections[i];
+            if (math.lengthsq(corr) < 1e-12f) return;
+
+            var p = particles[i];
+            p.position += corr;
             particles[i] = p;
         }
     }
