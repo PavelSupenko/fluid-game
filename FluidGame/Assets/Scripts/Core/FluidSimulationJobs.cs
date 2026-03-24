@@ -5,14 +5,20 @@ using Unity.Burst;
 using Unity.Mathematics;
 
 /// <summary>
-/// CPU-based SPH fluid simulation with Jobs + Burst and a sleep/wake system.
+/// CPU-based soft body simulation using Position Based Dynamics (PBD) + Jobs + Burst.
 ///
-/// SLEEP SYSTEM: Particles that aren't moving go to sleep and are excluded from
-/// expensive SPH computations. Only particles near the flask or recently disturbed
-/// areas are awake. This gives 10-15x speedup when most of the image is static.
+/// Instead of SPH fluid forces, particles are connected by springs that maintain
+/// shape while allowing jelly-like deformation. Springs can break under stress,
+/// allowing tearing.
 ///
-/// WAKE BUDGET: Max N particles can wake per frame, preventing FPS spikes when
-/// large areas collapse. Visually this creates a natural "cascading" effect.
+/// PBD step per sub-step:
+///   1. Build spatial hash (all alive particles)
+///   2. Predict: velocity += gravity*dt, predictedPos = pos + vel*dt
+///   3. Solve spring constraints on predictedPos (N iterations)
+///   4. Collisions between bodies (spatial hash lookup)
+///   5. Finalize: velocity = (predictedPos - pos)/dt, pos = predictedPos
+///   6. Flask suction + boundaries
+///   7. Sleep check
 /// </summary>
 public class FluidSimulationJobs : MonoBehaviour
 {
@@ -21,31 +27,31 @@ public class FluidSimulationJobs : MonoBehaviour
     public Vector2 containerMin = new Vector2(-4f, -3f);
     public Vector2 containerMax = new Vector2(4f, 4f);
 
-    // ─── Particle Spawning ───────────────────────────────────────
-    [Header("Particle Grid")]
+    // ─── Particle Settings ───────────────────────────────────────
+    [Header("Particle Grid (fallback if no image)")]
     public int gridWidth = 30;
     public int gridHeight = 20;
     public float particleSpacing = 0.15f;
     public float particleRadius = 0.05f;
+    public float smoothingRadius = 0.4f; // Used for spatial hash cell size + wake radius
 
-    // ─── SPH Parameters ─────────────────────────────────────────
-    [Header("SPH Settings")]
-    public float smoothingRadius = 0.4f;
-    public float particleMass = 1f;
-    public float restDensity = 50f;
-    public bool autoRestDensity = true;
-    public float pressureStiffness = 80f;
-    public float nearPressureStiffness = 5f;
+    // ─── PBD Soft Body Parameters ────────────────────────────────
+    [Header("Soft Body (PBD)")]
+    [Tooltip("Spring stiffness per solver iteration. 0 = loose jelly, 1 = rigid. " +
+             "Effective stiffness = 1 - (1-stiffness)^iterations")]
+    [Range(0.01f, 1f)]
+    public float springStiffness = 0.3f;
 
-    // ─── Cohesion & Separation ───────────────────────────────────
-    [Header("Cohesion & Separation")]
-    [Range(0f, 50f)]
-    public float cohesionStrength = 15f;
-    [Range(0f, 30f)]
-    public float interTypeRepulsion = 8f;
-    [Range(0f, 30f)]
-    public float surfaceTensionStrength = 5f;
-    public bool uniformFluid = false;
+    [Tooltip("Number of constraint solver iterations per sub-step. " +
+             "More = stiffer, more accurate, but costs more CPU.")]
+    [Range(1, 10)]
+    public int constraintIterations = 4;
+
+    [Tooltip("Collision repulsion between particles of different bodies")]
+    public float collisionStiffness = 0.5f;
+
+    [Tooltip("Collision radius — particles push apart when closer than this")]
+    public float collisionRadius = 0.08f;
 
     // ─── Physics ─────────────────────────────────────────────────
     [Header("Physics")]
@@ -61,32 +67,21 @@ public class FluidSimulationJobs : MonoBehaviour
 
     // ─── Sleep System ────────────────────────────────────────────
     [Header("Sleep System")]
-    [Tooltip("Particles with speed below this for sleepFrames will go to sleep")]
     public float sleepVelocityThreshold = 0.05f;
-
-    [Tooltip("Consecutive low-velocity frames before sleeping")]
     public int sleepFramesRequired = 30;
-
-    [Tooltip("Max particles that can wake up per FixedUpdate (prevents FPS spikes)")]
     public int wakeBudgetPerFrame = 150;
-
-    [Tooltip("Radius around disturbance point to wake sleeping particles")]
     public float wakeRadius = 1.5f;
-
-    [Tooltip("Start with all particles sleeping (for image mode — nothing moves until interacted with)")]
     public bool startSleeping = true;
+    public int scanBudgetPerFrame = 400;
 
-    // ─── Fluid Types ─────────────────────────────────────────────
+    // ─── Fluid Types (for color + flask targeting) ───────────────
     [Header("Fluid Types")]
     public FluidTypeDefinition[] fluidTypes = new FluidTypeDefinition[]
     {
-        new FluidTypeDefinition { name = "Heavy (Red)", color = new Color(0.9f, 0.2f, 0.15f),
-            density = 3f, viscosity = 8f, cohesion = 1f },
-        new FluidTypeDefinition { name = "Medium (Green)", color = new Color(0.2f, 0.85f, 0.3f),
-            density = 2f, viscosity = 5f, cohesion = 0.8f },
-        new FluidTypeDefinition { name = "Light (Blue)", color = new Color(0.2f, 0.4f, 0.95f),
-            density = 1f, viscosity = 2f, cohesion = 0.6f },
+        new FluidTypeDefinition { name = "Default", color = Color.white,
+            density = 2f, viscosity = 6f, cohesion = 1f },
     };
+    public bool uniformFluid = false;
 
     // ─── Flask (set by FlaskController) ──────────────────────────
     [HideInInspector] public float2 flaskPos;
@@ -101,29 +96,22 @@ public class FluidSimulationJobs : MonoBehaviour
     public int ParticleCount { get; private set; }
     public ComputeBuffer ParticleBuffer => particleBuffer;
     public int AwakeCount { get; private set; }
-
-    // ─── Soft Body Public Accessors ──────────────────────────────
     public int SpringCount { get; private set; }
     public int BodyCount { get; private set; }
     public bool HasSoftBodies { get; private set; }
 
     // ─── Internal Native Data ────────────────────────────────────
     private NativeArray<ParticleData> particles;
-    private NativeArray<float2> forces;
-    private NativeArray<float> densities;
-    private NativeArray<float> pressures;
-    private NativeArray<FluidTypeGPU> fluidTypeData;
+    private NativeArray<float2> predictedPos;
+    private NativeArray<int> sleepState;
+    private NativeArray<int> sleepCounter;
+    private NativeArray<int> bodyIndices;
 
-    // Sleep state (separate arrays to keep ParticleData at 48 bytes for GPU)
-    private NativeArray<int> sleepState;     // 0 = awake, 1 = sleeping
-    private NativeArray<int> sleepCounter;   // Frames at low velocity
-
-    // Soft body data
-    private NativeArray<int> bodyIndices;           // Per-particle body index (-1 = none)
-    private NativeArray<SpringData> springs;         // All springs
+    // Springs
+    private NativeArray<SpringData> springs;
     private int springCount;
 
-    // Spatial hash arrays
+    // Spatial hash
     private NativeArray<int> cellCounts;
     private NativeArray<int> cellOffsets;
     private NativeArray<int> sortedIndices;
@@ -137,32 +125,26 @@ public class FluidSimulationJobs : MonoBehaviour
     private float cellSize;
 
     // ─── Burst-compatible structs ────────────────────────────────
+
+    // Must produce 48-byte layout matching FluidParticle for GPU upload
     private struct ParticleData
     {
-        public float2 position;
-        public float2 velocity;
-        public int typeIndex;
-        public float density;
-        public float pressure;
-        public float alive;
-        public float4 color;
-    } // 48 bytes
+        public float2 position;     // 8
+        public float2 velocity;     // 8
+        public int typeIndex;       // 4
+        public float density;       // 4 (unused in PBD, kept for struct layout)
+        public float pressure;      // 4 (unused in PBD, kept for struct layout)
+        public float alive;         // 4
+        public float4 color;        // 16
+    } // Total: 48 bytes
 
-    // Burst-compatible version of SoftBodySpring
     private struct SpringData
     {
         public int particleA;
         public int particleB;
         public float restLength;
         public float breakThreshold;
-        public int alive;           // 1 = active, 0 = broken
-    }
-
-    private struct FluidTypeGPU
-    {
-        public float gravityScale;
-        public float viscosity;
-        public float cohesion;
+        public int alive;
     }
 
     // ─── Lifecycle ───────────────────────────────────────────────
@@ -170,15 +152,15 @@ public class FluidSimulationJobs : MonoBehaviour
     void Awake()
     {
         var imageSource = GetComponent<ImageToFluid>();
-        if (imageSource != null) 
+        if (imageSource != null)
             imageSource.TryParseImage();
-        
+
         if (imageSource != null && imageSource.IsReady)
             InitFromImage(imageSource);
         else
             SpawnParticles();
 
-        // Process soft body mask (if SoftBodySetup component exists)
+        // Process soft body mask
         var softBodySetup = GetComponent<SoftBodySetup>();
         if (softBodySetup != null && imageSource != null && imageSource.IsReady)
         {
@@ -197,15 +179,14 @@ public class FluidSimulationJobs : MonoBehaviour
         for (int step = 0; step < subSteps; step++)
             RunSimulationStep(dt);
 
-        // All wake checks run AFTER simulation so spatial hash is fresh.
+        // Wake checks — run after simulation so spatial hash is fresh
         if (flaskActive)
         {
             WakeNearPoint(flaskPos, wakeRadius);
             WakeColumnAbove(flaskPos);
         }
-
         CascadeWake();
-        DetectFloatingIslands();  // Grid-level check — cheap, catches all floating islands
+        DetectFloatingIslands();
 
         UploadToGPU();
     }
@@ -222,12 +203,10 @@ public class FluidSimulationJobs : MonoBehaviour
     {
         ParticleCount = gridWidth * gridHeight;
         Particles = new FluidParticle[ParticleCount];
-
         float totalWidth = (gridWidth - 1) * particleSpacing;
         float totalHeight = (gridHeight - 1) * particleSpacing;
         float startX = -totalWidth * 0.5f;
         float startY = containerMax.y - 0.5f - totalHeight;
-
         int typeCount = fluidTypes.Length;
         int rowsPerType = Mathf.Max(1, gridHeight / typeCount);
 
@@ -242,8 +221,7 @@ public class FluidSimulationJobs : MonoBehaviour
                     position = new Vector2(startX + x * particleSpacing, startY + y * particleSpacing)
                              + new Vector2(UnityEngine.Random.Range(-0.01f, 0.01f),
                                            UnityEngine.Random.Range(-0.01f, 0.01f)),
-                    velocity = Vector2.zero,
-                    typeIndex = typeIndex,
+                    velocity = Vector2.zero, typeIndex = typeIndex,
                     density = 0f, pressure = 0f, alive = 1f,
                     color = fluidTypes[typeIndex].color
                 };
@@ -258,22 +236,21 @@ public class FluidSimulationJobs : MonoBehaviour
         fluidTypes = source.GeneratedFluidTypes;
         particleSpacing = source.ComputedSpacing;
         uniformFluid = true;
-        startSleeping = true; // Image particles start asleep
+        startSleeping = true;
 
         float s = particleSpacing;
         smoothingRadius = s * 2.5f;
         particleRadius = s * 0.4f;
-        nearPressureStiffness = 10f;
-        pressureStiffness = 120f;
-        subSteps = Mathf.Max(subSteps, 4);
+        collisionRadius = s * 0.8f;
         wakeRadius = smoothingRadius * 4f;
+        subSteps = Mathf.Max(subSteps, 4);
 
-        Debug.Log($"[FluidSimJobs] From image: {ParticleCount} particles, " +
-                  $"spacing={s:F4}, h={smoothingRadius:F4}");
+        Debug.Log($"[FluidSimJobs] From image: {ParticleCount} particles, spacing={s:F4}");
     }
 
     void InitNativeData()
     {
+        // Spatial hash grid
         cellSize = smoothingRadius;
         float containerW = containerMax.x - containerMin.x;
         float containerH = containerMax.y - containerMin.y;
@@ -281,10 +258,9 @@ public class FluidSimulationJobs : MonoBehaviour
         hashGridH = Mathf.CeilToInt(containerH / cellSize) + 1;
         hashGridTotal = hashGridW * hashGridH;
 
+        // Allocate native arrays
         particles = new NativeArray<ParticleData>(ParticleCount, Allocator.Persistent);
-        forces = new NativeArray<float2>(ParticleCount, Allocator.Persistent);
-        densities = new NativeArray<float>(ParticleCount, Allocator.Persistent);
-        pressures = new NativeArray<float>(ParticleCount, Allocator.Persistent);
+        predictedPos = new NativeArray<float2>(ParticleCount, Allocator.Persistent);
         sleepState = new NativeArray<int>(ParticleCount, Allocator.Persistent);
         sleepCounter = new NativeArray<int>(ParticleCount, Allocator.Persistent);
 
@@ -293,23 +269,7 @@ public class FluidSimulationJobs : MonoBehaviour
         sortedIndices = new NativeArray<int>(ParticleCount, Allocator.Persistent);
         particleCellIndex = new NativeArray<int>(ParticleCount, Allocator.Persistent);
 
-        // Build fluid type data
-        float avgDensity = 0f;
-        for (int i = 0; i < fluidTypes.Length; i++) avgDensity += fluidTypes[i].density;
-        avgDensity /= fluidTypes.Length;
-
-        fluidTypeData = new NativeArray<FluidTypeGPU>(fluidTypes.Length, Allocator.Persistent);
-        for (int i = 0; i < fluidTypes.Length; i++)
-        {
-            fluidTypeData[i] = new FluidTypeGPU
-            {
-                gravityScale = fluidTypes[i].density / avgDensity,
-                viscosity = fluidTypes[i].viscosity,
-                cohesion = fluidTypes[i].cohesion
-            };
-        }
-
-        // Copy managed → native, set initial sleep state
+        // Copy managed → native
         for (int i = 0; i < ParticleCount; i++)
         {
             var p = Particles[i];
@@ -322,13 +282,11 @@ public class FluidSimulationJobs : MonoBehaviour
                 alive = p.alive,
                 color = new float4(p.color.r, p.color.g, p.color.b, p.color.a)
             };
-
-            // Start sleeping if configured (image mode) or awake (grid mode)
             sleepState[i] = (startSleeping && p.alive > 0.5f) ? 1 : 0;
             sleepCounter[i] = startSleeping ? sleepFramesRequired : 0;
         }
 
-        // ── Copy soft body data into native arrays ──
+        // ── Soft body data ──
         var softBodySetup = GetComponent<SoftBodySetup>();
         if (HasSoftBodies && softBodySetup != null && softBodySetup.IsReady)
         {
@@ -346,96 +304,127 @@ public class FluidSimulationJobs : MonoBehaviour
                 var s = softBodySetup.Springs[i];
                 springs[i] = new SpringData
                 {
-                    particleA = s.particleA,
-                    particleB = s.particleB,
-                    restLength = s.restLength,
-                    breakThreshold = s.breakThreshold,
+                    particleA = s.particleA, particleB = s.particleB,
+                    restLength = s.restLength, breakThreshold = s.breakThreshold,
                     alive = s.alive
                 };
             }
-
-            Debug.Log($"[FluidSimJobs] Soft body data loaded: {BodyCount} bodies, " +
-                      $"{SpringCount} springs");
+            Debug.Log($"[FluidSimJobs] Soft bodies: {BodyCount} bodies, {SpringCount} springs");
         }
         else
         {
-            // No soft bodies — allocate minimal arrays to avoid null checks
             bodyIndices = new NativeArray<int>(ParticleCount, Allocator.Persistent);
             springs = new NativeArray<SpringData>(1, Allocator.Persistent);
-            springCount = 0;
-            SpringCount = 0;
-            BodyCount = 0;
+            springCount = 0; SpringCount = 0; BodyCount = 0;
         }
-
-        if (autoRestDensity) CalibrateRestDensity();
 
         particleBuffer = new ComputeBuffer(ParticleCount, 48);
         UploadToGPU();
 
         AwakeCount = startSleeping ? 0 : ParticleCount;
-        Debug.Log($"[FluidSimJobs] Init: {ParticleCount} particles, " +
-                  $"grid {hashGridW}x{hashGridH}, rest={restDensity:F1}, " +
-                  $"awake={AwakeCount}, sleep={startSleeping}");
+        Debug.Log($"[FluidSimJobs] Init: {ParticleCount} particles, grid {hashGridW}x{hashGridH}");
     }
 
-    void CalibrateRestDensity()
+    // ═════════════════════════════════════════════════════════════
+    //  PBD SIMULATION STEP
+    // ═════════════════════════════════════════════════════════════
+
+    void RunSimulationStep(float dt)
     {
-        float h = smoothingRadius;
-        float hSqr = h * h;
-        float h8 = hSqr * hSqr * hSqr * hSqr;
-        float coeff = 4f / (math.PI * h8);
-
-        float2 minP = new float2(float.MaxValue), maxP = new float2(float.MinValue);
-        for (int i = 0; i < ParticleCount; i++)
+        // 1. Build spatial hash (ALL alive particles — sleeping + awake)
+        new AssignCellsJob
         {
-            float2 pos = particles[i].position;
-            minP = math.min(minP, pos);
-            maxP = math.max(maxP, pos);
-        }
-        float2 center = (minP + maxP) * 0.5f;
-        float sampleRadSqr = math.lengthsq((maxP - minP) * 0.25f);
+            particles = particles, particleCellIndex = particleCellIndex,
+            cellSize = cellSize,
+            containerMin = new float2(containerMin.x, containerMin.y),
+            gridW = hashGridW, gridH = hashGridH
+        }.Schedule(ParticleCount, 128).Complete();
 
-        float totalDensity = 0f;
-        int sampleCount = 0;
-
-        for (int i = 0; i < ParticleCount && sampleCount < 200; i++)
+        new BuildGridJob
         {
-            if (math.lengthsq(particles[i].position - center) > sampleRadSqr) continue;
-            float density = 0f;
-            for (int j = 0; j < ParticleCount; j++)
+            particleCellIndex = particleCellIndex,
+            cellCounts = cellCounts, cellOffsets = cellOffsets,
+            sortedIndices = sortedIndices,
+            particleCount = ParticleCount, gridTotal = hashGridTotal
+        }.Run();
+
+        // 2. Predict positions: vel += gravity*dt, predicted = pos + vel*dt
+        new PredictJob
+        {
+            particles = particles, predictedPos = predictedPos,
+            sleepState = sleepState,
+            gravity = new float2(gravity.x, gravity.y), dt = dt
+        }.Schedule(ParticleCount, 256).Complete();
+
+        // 3. Solve spring constraints (N iterations)
+        // Single-threaded with Burst — springs read/write predicted positions.
+        // ~12k springs × 4 iterations = ~48k simple operations — trivial for Burst.
+        for (int iter = 0; iter < constraintIterations; iter++)
+        {
+            new SpringSolveJob
             {
-                float rSqr = math.lengthsq(particles[i].position - particles[j].position);
-                if (rSqr < hSqr)
-                {
-                    float d = hSqr - rSqr;
-                    density += particleMass * coeff * d * d * d;
-                }
-            }
-            totalDensity += density;
-            sampleCount++;
+                springs = springs, predictedPos = predictedPos,
+                particles = particles, sleepState = sleepState,
+                springCount = springCount, stiffness = springStiffness
+            }.Run();
         }
 
-        if (sampleCount > 0)
-            restDensity = (totalDensity / sampleCount) * (uniformFluid ? 1f : 0.95f);
+        // 4. Collision between particles of different bodies (parallel)
+        new CollisionJob
+        {
+            particles = particles, predictedPos = predictedPos,
+            sleepState = sleepState, bodyIndices = bodyIndices,
+            sortedIndices = sortedIndices,
+            cellCounts = cellCounts, cellOffsets = cellOffsets,
+            cellSize = cellSize,
+            containerMin = new float2(containerMin.x, containerMin.y),
+            gridW = hashGridW, gridH = hashGridH,
+            collisionRadius = collisionRadius, collisionStiffness = collisionStiffness
+        }.Schedule(ParticleCount, 128).Complete();
 
-        Debug.Log($"[FluidSimJobs] restDensity = {restDensity:F1} ({sampleCount} samples)");
+        // 5. Finalize: update velocity from position change, apply damping,
+        //    flask suction, boundaries
+        new FinalizeJob
+        {
+            particles = particles, predictedPos = predictedPos,
+            sleepState = sleepState,
+            dt = dt, velocityDamping = velocityDamping,
+            maxSpeed = maxSpeed, particleRadius = particleRadius,
+            boundaryDamping = boundaryDamping,
+            containerMin = new float2(containerMin.x, containerMin.y),
+            containerMax = new float2(containerMax.x, containerMax.y),
+            flaskActive = flaskActive, flaskPos = flaskPos,
+            flaskTargetType = flaskTargetType,
+            flaskRadius = flaskRadius, flaskAbsorbRadius = flaskAbsorbRadius,
+            flaskStrength = flaskStrength
+        }.Schedule(ParticleCount, 128).Complete();
+
+        // 6. Break overstretched springs
+        if (springCount > 0)
+        {
+            new SpringBreakJob
+            {
+                springs = springs, particles = particles,
+                springCount = springCount
+            }.Run();
+        }
+
+        // 7. Sleep check
+        new SleepCheckJob
+        {
+            particles = particles, sleepState = sleepState,
+            sleepCounter = sleepCounter,
+            sleepVelThresholdSqr = sleepVelocityThreshold * sleepVelocityThreshold,
+            sleepFramesRequired = sleepFramesRequired
+        }.Schedule(ParticleCount, 256).Complete();
     }
 
-    // ─── Wake / Sleep Logic (main thread) ────────────────────────
+    // ═════════════════════════════════════════════════════════════
+    //  WAKE / SLEEP LOGIC (main thread)
+    // ═════════════════════════════════════════════════════════════
 
-    // Rotating cursors — each method resumes scanning where it left off last frame.
-    // This spreads the O(n) scan cost across multiple frames.
     private int cascadeScanCursor = 0;
 
-    [Header("Scan Budget")]
-    [Tooltip("Max particles to SCAN (not wake) per frame in cascade/unsupported checks. " +
-             "Lower = less CPU per frame, but slower reaction to changes.")]
-    public int scanBudgetPerFrame = 400;
-
-    /// <summary>
-    /// Moving particles wake sleeping neighbors.
-    /// Scans a chunk of particles each frame using a rotating cursor.
-    /// </summary>
     void CascadeWake()
     {
         int wakeBudget = wakeBudgetPerFrame;
@@ -448,9 +437,7 @@ public class FluidSimulationJobs : MonoBehaviour
             int i = cascadeScanCursor;
             cascadeScanCursor = (cascadeScanCursor + 1) % ParticleCount;
 
-            // Only awake, alive, moving particles can cascade-wake
-            if (sleepState[i] != 0) continue;
-            if (particles[i].alive < 0.5f) continue;
+            if (sleepState[i] != 0 || particles[i].alive < 0.5f) continue;
             if (math.lengthsq(particles[i].velocity) < movingThresholdSqr) continue;
 
             float2 pos = particles[i].position;
@@ -470,22 +457,15 @@ public class FluidSimulationJobs : MonoBehaviour
                 {
                     int j = sortedIndices[start + s];
                     if (sleepState[j] != 1) continue;
-
                     if (math.lengthsq(particles[j].position - pos) < cascadeRadiusSqr)
                     {
-                        sleepState[j] = 0;
-                        sleepCounter[j] = 0;
-                        wakeBudget--;
+                        sleepState[j] = 0; sleepCounter[j] = 0; wakeBudget--;
                     }
                 }
             }
         }
     }
 
-    /// <summary>
-    /// Wakes sleeping particles near the flask cursor.
-    /// Uses spatial hash for efficient lookup — no full particle scan.
-    /// </summary>
     void WakeNearPoint(float2 point, float radius)
     {
         int wakeBudget = wakeBudgetPerFrame;
@@ -498,226 +478,119 @@ public class FluidSimulationJobs : MonoBehaviour
         for (int cy = minCell.y; cy <= maxCell.y && wakeBudget > 0; cy++)
         {
             if (cx < 0 || cx >= hashGridW || cy < 0 || cy >= hashGridH) continue;
-
             int ci = cy * hashGridW + cx;
-            int start = cellOffsets[ci];
-            int count = cellCounts[ci];
+            int start = cellOffsets[ci]; int count = cellCounts[ci];
 
             for (int s = 0; s < count && wakeBudget > 0; s++)
             {
                 int i = sortedIndices[start + s];
-                if (sleepState[i] == 0) continue;
-                if (particles[i].alive < 0.5f) continue;
+                if (sleepState[i] == 0 || particles[i].alive < 0.5f) continue;
 
-                // Only wake particles matching the flask target type.
-                // Non-matching particles stay asleep — they'll wake via
-                // cascade when absorbed neighbors start moving nearby.
                 bool typeMatch = (flaskTargetType < 0) || (particles[i].typeIndex == flaskTargetType);
                 if (!typeMatch) continue;
 
                 if (math.lengthsq(particles[i].position - point) < radiusSqr)
-                {
-                    sleepState[i] = 0;
-                    sleepCounter[i] = 0;
-                    wakeBudget--;
-                }
+                { sleepState[i] = 0; sleepCounter[i] = 0; wakeBudget--; }
             }
         }
     }
 
-    /// <summary>
-    /// Wakes sleeping particles in a vertical column above the suction point.
-    /// This prevents floating islands: when particles are removed from the middle,
-    /// everything above must know there's a void below and start falling.
-    /// Very cheap: only scans grid cells in a narrow vertical strip.
-    /// </summary>
     void WakeColumnAbove(float2 point)
     {
         int wakeBudget = wakeBudgetPerFrame;
-
-        // Column width: slightly wider than smoothing radius so we catch
-        // particles that aren't directly above but would be affected
         float halfWidth = smoothingRadius * 1.5f;
 
         int2 colMin = CellCoord(new float2(point.x - halfWidth, point.y));
         int2 colMax = CellCoord(new float2(point.x + halfWidth, containerMax.y));
 
-        // Scan upward from flask position to top of container
         for (int cy = colMin.y; cy <= colMax.y && wakeBudget > 0; cy++)
         for (int cx = colMin.x; cx <= colMax.x && wakeBudget > 0; cx++)
         {
             if (cx < 0 || cx >= hashGridW || cy < 0 || cy >= hashGridH) continue;
-
             int ci = cy * hashGridW + cx;
-            int start = cellOffsets[ci];
-            int count = cellCounts[ci];
+            int start = cellOffsets[ci]; int count = cellCounts[ci];
 
             for (int s = 0; s < count && wakeBudget > 0; s++)
             {
                 int i = sortedIndices[start + s];
-                if (sleepState[i] != 1) continue;
-                if (particles[i].alive < 0.5f) continue;
+                if (sleepState[i] != 1 || particles[i].alive < 0.5f) continue;
 
-                // Only wake matching type — others wake via cascade/islands
                 bool typeMatch = (flaskTargetType < 0) || (particles[i].typeIndex == flaskTargetType);
                 if (!typeMatch) continue;
 
-                float dx = particles[i].position.x - point.x;
-                if (dx * dx < halfWidth * halfWidth)
-                {
-                    sleepState[i] = 0;
-                    sleepCounter[i] = 0;
-                    wakeBudget--;
-                }
+                float dx2 = particles[i].position.x - point.x;
+                if (dx2 * dx2 < halfWidth * halfWidth)
+                { sleepState[i] = 0; sleepCounter[i] = 0; wakeBudget--; }
             }
         }
     }
 
-    /// <summary>
-    /// Detects floating islands using a grid-level flood fill from the floor.
-    /// 
-    /// Algorithm:
-    ///   1. Mark all bottom-row grid cells that contain alive particles as "grounded"
-    ///   2. Propagate upward: cell (x,y) is grounded if it has alive particles AND
-    ///      any of (x-1,y-1), (x,y-1), (x+1,y-1) is grounded
-    ///   3. Wake all sleeping particles in non-grounded cells
-    ///
-    /// Cost: O(gridW × gridH) for the flood + O(floating particles) for waking.
-    /// Grid is typically ~50×50 = 2500 cells — trivially cheap every frame.
-    /// </summary>
     void DetectFloatingIslands()
     {
         int wakeBudget = wakeBudgetPerFrame;
-
-        // ── Phase 1: Flood fill "grounded" with diagonals (catches true islands) ──
-
         bool[] grounded = new bool[hashGridTotal];
 
-        // Bottom row: grounded if has alive particles
+        for (int x = 0; x < hashGridW; x++)
+            grounded[x] = cellCounts[x] > 0;
+
+        for (int y = 1; y < hashGridH; y++)
         for (int x = 0; x < hashGridW; x++)
         {
-            grounded[x] = cellCounts[x] > 0; // y=0 row
+            int ci = y * hashGridW + x;
+            if (cellCounts[ci] == 0) { grounded[ci] = false; continue; }
+
+            bool sup = false;
+            int yb = y - 1;
+            if (x > 0) sup |= grounded[yb * hashGridW + (x - 1)];
+            sup |= grounded[yb * hashGridW + x];
+            if (x < hashGridW - 1) sup |= grounded[yb * hashGridW + (x + 1)];
+            grounded[ci] = sup;
         }
 
-        // Propagate upward: cell is grounded if has particles AND
-        // any of (x-1,y-1), (x,y-1), (x+1,y-1) is grounded
-        for (int y = 1; y < hashGridH; y++)
-        {
-            for (int x = 0; x < hashGridW; x++)
-            {
-                int ci = y * hashGridW + x;
-
-                if (cellCounts[ci] == 0)
-                {
-                    grounded[ci] = false;
-                    continue;
-                }
-
-                bool supported = false;
-                int yBelow = y - 1;
-
-                if (x > 0) supported |= grounded[yBelow * hashGridW + (x - 1)];
-                supported |= grounded[yBelow * hashGridW + x];
-                if (x < hashGridW - 1) supported |= grounded[yBelow * hashGridW + (x + 1)];
-
-                grounded[ci] = supported;
-            }
-        }
-
-        // ── Phase 2: Wake particles in true floating islands (not grounded at all) ──
+        // Phase 2: Wake true islands
         for (int ci = 0; ci < hashGridTotal && wakeBudget > 0; ci++)
         {
-            if (grounded[ci]) continue;
-            if (cellCounts[ci] == 0) continue;
-
-            int start = cellOffsets[ci];
-            int count = cellCounts[ci];
-
-            for (int s = 0; s < count && wakeBudget > 0; s++)
-            {
-                int i = sortedIndices[start + s];
-                if (sleepState[i] != 1) continue;
-
-                sleepState[i] = 0;
-                sleepCounter[i] = 0;
-                wakeBudget--;
-            }
+            if (grounded[ci] || cellCounts[ci] == 0) continue;
+            WakeSleepingInCell(ci, ref wakeBudget);
         }
 
-        // ── Phase 3: Slope flow — wake grounded sleeping particles ──
-        // that have NO particles directly below them.
+        // Phase 3: Slope flow
         for (int y = 1; y < hashGridH && wakeBudget > 0; y++)
+        for (int x = 0; x < hashGridW && wakeBudget > 0; x++)
         {
-            for (int x = 0; x < hashGridW && wakeBudget > 0; x++)
-            {
-                int ci = y * hashGridW + x;
-
-                if (!grounded[ci]) continue;
-                if (cellCounts[ci] == 0) continue;
-
-                int belowCi = (y - 1) * hashGridW + x;
-                if (cellCounts[belowCi] > 0) continue;
-
-                WakeSleepingInCell(ci, ref wakeBudget);
-            }
+            int ci = y * hashGridW + x;
+            if (!grounded[ci] || cellCounts[ci] == 0) continue;
+            if (cellCounts[(y - 1) * hashGridW + x] > 0) continue;
+            WakeSleepingInCell(ci, ref wakeBudget);
         }
 
-        // ── Phase 4: Horizontal spreading — liquid doesn't form vertical walls ──
-        // If a cell has empty space to its side AND the diagonal-below on that side
-        // is also empty, particles should flow sideways and down.
-        // This turns columns into slopes that spread out like liquid.
+        // Phase 4: Horizontal spreading
         for (int y = 1; y < hashGridH && wakeBudget > 0; y++)
+        for (int x = 0; x < hashGridW && wakeBudget > 0; x++)
         {
-            for (int x = 0; x < hashGridW && wakeBudget > 0; x++)
-            {
-                int ci = y * hashGridW + x;
+            int ci = y * hashGridW + x;
+            if (!grounded[ci] || cellCounts[ci] == 0) continue;
 
-                if (!grounded[ci]) continue;
-                if (cellCounts[ci] == 0) continue;
+            bool flowLeft = false, flowRight = false;
+            if (x > 0)
+                flowLeft = cellCounts[y * hashGridW + (x - 1)] == 0
+                        && cellCounts[(y - 1) * hashGridW + (x - 1)] == 0;
+            if (x < hashGridW - 1)
+                flowRight = cellCounts[y * hashGridW + (x + 1)] == 0
+                         && cellCounts[(y - 1) * hashGridW + (x + 1)] == 0;
 
-                // Check left side: is (x-1, y) empty AND (x-1, y-1) empty?
-                // That means open space to flow into diagonally down-left.
-                bool flowLeft = false;
-                if (x > 0)
-                {
-                    bool sideEmpty = cellCounts[y * hashGridW + (x - 1)] == 0;
-                    bool diagEmpty = cellCounts[(y - 1) * hashGridW + (x - 1)] == 0;
-                    flowLeft = sideEmpty && diagEmpty;
-                }
-
-                // Check right side: same logic
-                bool flowRight = false;
-                if (x < hashGridW - 1)
-                {
-                    bool sideEmpty = cellCounts[y * hashGridW + (x + 1)] == 0;
-                    bool diagEmpty = cellCounts[(y - 1) * hashGridW + (x + 1)] == 0;
-                    flowRight = sideEmpty && diagEmpty;
-                }
-
-                if (flowLeft || flowRight)
-                {
-                    WakeSleepingInCell(ci, ref wakeBudget);
-                }
-            }
+            if (flowLeft || flowRight) WakeSleepingInCell(ci, ref wakeBudget);
         }
     }
 
-    /// <summary>
-    /// Helper: wakes sleeping particles in a specific grid cell, respecting budget.
-    /// </summary>
     void WakeSleepingInCell(int ci, ref int wakeBudget)
     {
-        int start = cellOffsets[ci];
-        int count = cellCounts[ci];
-
+        int start = cellOffsets[ci]; int count = cellCounts[ci];
         for (int s = 0; s < count && wakeBudget > 0; s++)
         {
             int i = sortedIndices[start + s];
             if (sleepState[i] != 1) continue;
-
-            sleepState[i] = 0;
-            sleepCounter[i] = 0;
-            wakeBudget--;
+            sleepState[i] = 0; sleepCounter[i] = 0; wakeBudget--;
         }
     }
 
@@ -728,120 +601,9 @@ public class FluidSimulationJobs : MonoBehaviour
             int2.zero, new int2(hashGridW - 1, hashGridH - 1));
     }
 
-    // ─── Simulation Step ─────────────────────────────────────────
-
-    void RunSimulationStep(float dt)
-    {
-        // 1. Build spatial hash — ALL alive particles (sleeping + awake)
-        //    Sleeping particles must be in the grid so awake neighbors sense them for density.
-        var assignJob = new AssignCellsJob
-        {
-            particles = particles,
-            particleCellIndex = particleCellIndex,
-            cellSize = cellSize,
-            containerMin = new float2(containerMin.x, containerMin.y),
-            gridW = hashGridW, gridH = hashGridH
-        };
-        assignJob.Schedule(ParticleCount, 128).Complete();
-
-        var buildGridJob = new BuildGridJob
-        {
-            particleCellIndex = particleCellIndex,
-            cellCounts = cellCounts,
-            cellOffsets = cellOffsets,
-            sortedIndices = sortedIndices,
-            particleCount = ParticleCount,
-            gridTotal = hashGridTotal
-        };
-        buildGridJob.Run();
-
-        // 2. Density — only for awake particles, but reads ALL neighbors
-        var densityJob = new DensityJob
-        {
-            particles = particles,
-            sleepState = sleepState,
-            sortedIndices = sortedIndices,
-            cellCounts = cellCounts,
-            cellOffsets = cellOffsets,
-            densities = densities,
-            pressures = pressures,
-            cellSize = cellSize,
-            containerMin = new float2(containerMin.x, containerMin.y),
-            gridW = hashGridW, gridH = hashGridH,
-            smoothingRadiusSqr = smoothingRadius * smoothingRadius,
-            particleMass = particleMass,
-            restDensity = restDensity,
-            pressureStiffness = pressureStiffness,
-            poly6Coeff = 4f / (math.PI * math.pow(smoothingRadius, 8))
-        };
-        densityJob.Schedule(ParticleCount, 128).Complete();
-
-        // 3. Forces — only for awake particles
-        var forcesJob = new ForcesJob
-        {
-            particles = particles,
-            sleepState = sleepState,
-            sortedIndices = sortedIndices,
-            cellCounts = cellCounts,
-            cellOffsets = cellOffsets,
-            densities = densities,
-            pressures = pressures,
-            forces = forces,
-            fluidTypeData = fluidTypeData,
-            cellSize = cellSize,
-            containerMin = new float2(containerMin.x, containerMin.y),
-            gridW = hashGridW, gridH = hashGridH,
-            smoothingRadius = smoothingRadius,
-            smoothingRadiusSqr = smoothingRadius * smoothingRadius,
-            particleMass = particleMass,
-            nearPressureStiffness = nearPressureStiffness,
-            cohesionStrength = cohesionStrength,
-            interTypeRepulsion = interTypeRepulsion,
-            uniformFluid = uniformFluid,
-            spikyGradCoeff = -10f / (math.PI * math.pow(smoothingRadius, 5)),
-            viscLaplCoeff = 40f / (math.PI * math.pow(smoothingRadius, 5))
-        };
-        forcesJob.Schedule(ParticleCount, 64).Complete();
-
-        // 4. Integrate — only awake particles, includes suction
-        var integrateJob = new IntegrateJob
-        {
-            particles = particles,
-            sleepState = sleepState,
-            forces = forces,
-            densities = densities,
-            fluidTypeData = fluidTypeData,
-            gravity = new float2(gravity.x, gravity.y),
-            dt = dt,
-            velocityDamping = velocityDamping,
-            maxSpeed = maxSpeed,
-            particleRadius = particleRadius,
-            boundaryDamping = boundaryDamping,
-            containerMin = new float2(containerMin.x, containerMin.y),
-            containerMax = new float2(containerMax.x, containerMax.y),
-            uniformFluid = uniformFluid,
-            flaskActive = flaskActive,
-            flaskPos = flaskPos,
-            flaskTargetType = flaskTargetType,
-            flaskRadius = flaskRadius,
-            flaskAbsorbRadius = flaskAbsorbRadius,
-            flaskStrength = flaskStrength
-        };
-        integrateJob.Schedule(ParticleCount, 128).Complete();
-
-        // 5. Sleep check — awake particles with low velocity go to sleep
-        var sleepJob = new SleepCheckJob
-        {
-            particles = particles,
-            sleepState = sleepState,
-            sleepCounter = sleepCounter,
-            sleepVelThresholdSqr = sleepVelocityThreshold * sleepVelocityThreshold,
-            sleepFramesRequired = sleepFramesRequired
-        };
-        sleepJob.Schedule(ParticleCount, 256).Complete();
-    }
-
-    // ─── GPU Upload ──────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════
+    //  GPU UPLOAD + DISPOSE
+    // ═════════════════════════════════════════════════════════════
 
     void UploadToGPU()
     {
@@ -854,8 +616,7 @@ public class FluidSimulationJobs : MonoBehaviour
                 position = new Vector2(p.position.x, p.position.y),
                 velocity = new Vector2(p.velocity.x, p.velocity.y),
                 typeIndex = p.typeIndex,
-                density = densities[i],
-                pressure = pressures[i],
+                density = 0f, pressure = 0f,
                 alive = p.alive,
                 color = new Color(p.color.x, p.color.y, p.color.z, p.color.w)
             };
@@ -868,9 +629,7 @@ public class FluidSimulationJobs : MonoBehaviour
     void DisposeNative()
     {
         if (particles.IsCreated) particles.Dispose();
-        if (forces.IsCreated) forces.Dispose();
-        if (densities.IsCreated) densities.Dispose();
-        if (pressures.IsCreated) pressures.Dispose();
+        if (predictedPos.IsCreated) predictedPos.Dispose();
         if (sleepState.IsCreated) sleepState.Dispose();
         if (sleepCounter.IsCreated) sleepCounter.Dispose();
         if (bodyIndices.IsCreated) bodyIndices.Dispose();
@@ -879,42 +638,35 @@ public class FluidSimulationJobs : MonoBehaviour
         if (cellOffsets.IsCreated) cellOffsets.Dispose();
         if (sortedIndices.IsCreated) sortedIndices.Dispose();
         if (particleCellIndex.IsCreated) particleCellIndex.Dispose();
-        if (fluidTypeData.IsCreated) fluidTypeData.Dispose();
     }
 
     void OnDrawGizmos()
     {
         Gizmos.color = Color.yellow;
-        Vector3 center = new Vector3((containerMin.x + containerMax.x) * 0.5f,
-                                     (containerMin.y + containerMax.y) * 0.5f, 0f);
-        Vector3 size = new Vector3(containerMax.x - containerMin.x,
-                                   containerMax.y - containerMin.y, 0.01f);
-        Gizmos.DrawWireCube(center, size);
+        Vector3 c = new Vector3((containerMin.x + containerMax.x) * 0.5f,
+                                (containerMin.y + containerMax.y) * 0.5f, 0f);
+        Vector3 s = new Vector3(containerMax.x - containerMin.x,
+                                containerMax.y - containerMin.y, 0.01f);
+        Gizmos.DrawWireCube(c, s);
     }
 
     // ═════════════════════════════════════════════════════════════
-    //  JOBS
+    //  JOBS — PBD PHYSICS
     // ═════════════════════════════════════════════════════════════
 
-    // ─── Assign cell index (parallel) ────────────────────────────
+    // ─── Spatial hash: assign cells ──────────────────────────────
 
     [BurstCompile]
     struct AssignCellsJob : IJobParallelFor
     {
         [ReadOnly] public NativeArray<ParticleData> particles;
         public NativeArray<int> particleCellIndex;
-        public float cellSize;
-        public float2 containerMin;
+        public float cellSize; public float2 containerMin;
         public int gridW, gridH;
 
         public void Execute(int i)
         {
-            // ALL alive particles go in the grid (sleeping + awake)
-            if (particles[i].alive < 0.5f)
-            {
-                particleCellIndex[i] = -1;
-                return;
-            }
+            if (particles[i].alive < 0.5f) { particleCellIndex[i] = -1; return; }
             int2 cell = math.clamp(
                 (int2)math.floor((particles[i].position - containerMin) / cellSize),
                 int2.zero, new int2(gridW - 1, gridH - 1));
@@ -922,79 +674,155 @@ public class FluidSimulationJobs : MonoBehaviour
         }
     }
 
-    // ─── Build grid (single-threaded, Burst) ─────────────────────
+    // ─── Spatial hash: build grid ────────────────────────────────
 
     [BurstCompile]
     struct BuildGridJob : IJob
     {
         [ReadOnly] public NativeArray<int> particleCellIndex;
-        public NativeArray<int> cellCounts;
-        public NativeArray<int> cellOffsets;
-        public NativeArray<int> sortedIndices;
+        public NativeArray<int> cellCounts, cellOffsets, sortedIndices;
         public int particleCount, gridTotal;
 
         public void Execute()
         {
             for (int c = 0; c < gridTotal; c++) cellCounts[c] = 0;
             for (int i = 0; i < particleCount; i++)
-            {
-                int ci = particleCellIndex[i];
-                if (ci >= 0) cellCounts[ci]++;
-            }
+                if (particleCellIndex[i] >= 0) cellCounts[particleCellIndex[i]]++;
 
-            int offset = 0;
-            for (int c = 0; c < gridTotal; c++)
-            {
-                cellOffsets[c] = offset;
-                offset += cellCounts[c];
-            }
+            int off = 0;
+            for (int c = 0; c < gridTotal; c++) { cellOffsets[c] = off; off += cellCounts[c]; }
 
-            var tempOff = new NativeArray<int>(gridTotal, Allocator.Temp);
-            for (int c = 0; c < gridTotal; c++) tempOff[c] = cellOffsets[c];
+            var tmp = new NativeArray<int>(gridTotal, Allocator.Temp);
+            for (int c = 0; c < gridTotal; c++) tmp[c] = cellOffsets[c];
             for (int i = 0; i < particleCount; i++)
             {
                 int ci = particleCellIndex[i];
-                if (ci < 0) continue;
-                sortedIndices[tempOff[ci]++] = i;
+                if (ci >= 0) sortedIndices[tmp[ci]++] = i;
             }
-            tempOff.Dispose();
+            tmp.Dispose();
         }
     }
 
-    // ─── Density (parallel, skips sleeping) ──────────────────────
+    // ─── PBD Step 1: Predict positions ───────────────────────────
 
     [BurstCompile]
-    struct DensityJob : IJobParallelFor
+    struct PredictJob : IJobParallelFor
     {
-        [ReadOnly] public NativeArray<ParticleData> particles;
+        public NativeArray<ParticleData> particles;
+        public NativeArray<float2> predictedPos;
         [ReadOnly] public NativeArray<int> sleepState;
-        [ReadOnly] public NativeArray<int> sortedIndices;
-        [ReadOnly] public NativeArray<int> cellCounts;
-        [ReadOnly] public NativeArray<int> cellOffsets;
-        [NativeDisableParallelForRestriction] public NativeArray<float> densities;
-        [NativeDisableParallelForRestriction] public NativeArray<float> pressures;
-
-        public float cellSize, smoothingRadiusSqr;
-        public float2 containerMin;
-        public int gridW, gridH;
-        public float particleMass, restDensity, pressureStiffness, poly6Coeff;
+        public float2 gravity; public float dt;
 
         public void Execute(int i)
         {
-            // SKIP sleeping particles — they don't need updated density
-            if (sleepState[i] == 1 || particles[i].alive < 0.5f)
+            var p = particles[i];
+
+            // Sleeping or dead: predicted = current (no movement)
+            if (p.alive < 0.5f || sleepState[i] == 1)
             {
-                densities[i] = restDensity; // Stable placeholder
-                pressures[i] = 0f;
+                predictedPos[i] = p.position;
                 return;
             }
 
-            float2 posI = particles[i].position;
+            // Apply gravity to velocity, then predict
+            p.velocity += gravity * dt;
+            predictedPos[i] = p.position + p.velocity * dt;
+
+            particles[i] = p;
+        }
+    }
+
+    // ─── PBD Step 2: Spring constraint solver ────────────────────
+
+    [BurstCompile]
+    struct SpringSolveJob : IJob
+    {
+        public NativeArray<SpringData> springs;
+        public NativeArray<float2> predictedPos;
+        [ReadOnly] public NativeArray<ParticleData> particles;
+        [ReadOnly] public NativeArray<int> sleepState;
+        public int springCount; public float stiffness;
+
+        public void Execute()
+        {
+            for (int s = 0; s < springCount; s++)
+            {
+                var spring = springs[s];
+                if (spring.alive == 0) continue;
+
+                int a = spring.particleA;
+                int b = spring.particleB;
+
+                // Skip if both dead
+                if (particles[a].alive < 0.5f || particles[b].alive < 0.5f) continue;
+
+                bool aAwake = sleepState[a] == 0;
+                bool bAwake = sleepState[b] == 0;
+
+                // Skip if both sleeping
+                if (!aAwake && !bAwake) continue;
+
+                float2 posA = predictedPos[a];
+                float2 posB = predictedPos[b];
+
+                float2 delta = posB - posA;
+                float dist = math.length(delta);
+
+                if (dist < 1e-8f) continue;
+
+                float diff = (dist - spring.restLength) / dist;
+                float2 correction = delta * diff * stiffness * 0.5f;
+
+                // If one is sleeping, it acts as an anchor — only the awake one moves
+                if (aAwake && bAwake)
+                {
+                    predictedPos[a] = posA + correction;
+                    predictedPos[b] = posB - correction;
+                }
+                else if (aAwake)
+                {
+                    // B is anchor — A gets full correction
+                    predictedPos[a] = posA + correction * 2f;
+                }
+                else
+                {
+                    // A is anchor — B gets full correction
+                    predictedPos[b] = posB - correction * 2f;
+                }
+            }
+        }
+    }
+
+    // ─── PBD Step 3: Collision between different bodies ──────────
+
+    [BurstCompile]
+    struct CollisionJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<ParticleData> particles;
+        [NativeDisableParallelForRestriction]
+        public NativeArray<float2> predictedPos;
+        [ReadOnly] public NativeArray<int> sleepState;
+        [ReadOnly] public NativeArray<int> bodyIndices;
+        [ReadOnly] public NativeArray<int> sortedIndices;
+        [ReadOnly] public NativeArray<int> cellCounts, cellOffsets;
+        public float cellSize; public float2 containerMin;
+        public int gridW, gridH;
+        public float collisionRadius, collisionStiffness;
+
+        public void Execute(int i)
+        {
+            if (particles[i].alive < 0.5f || sleepState[i] == 1) return;
+
+            float2 posI = predictedPos[i];
+            int bodyI = bodyIndices[i];
+            float collRadSqr = collisionRadius * collisionRadius;
+
             int2 cellI = math.clamp(
                 (int2)math.floor((posI - containerMin) / cellSize),
                 int2.zero, new int2(gridW - 1, gridH - 1));
 
-            float density = 0f;
+            float2 totalPush = float2.zero;
+            int pushCount = 0;
 
             for (int dx = -1; dx <= 1; dx++)
             for (int dy = -1; dy <= 1; dy++)
@@ -1003,189 +831,68 @@ public class FluidSimulationJobs : MonoBehaviour
                 if (nc.x < 0 || nc.x >= gridW || nc.y < 0 || nc.y >= gridH) continue;
 
                 int ci = nc.y * gridW + nc.x;
-                int start = cellOffsets[ci];
-                int count = cellCounts[ci];
-
-                // Reads ALL neighbors (sleeping + awake) so density is correct
-                for (int s = 0; s < count; s++)
-                {
-                    int j = sortedIndices[start + s];
-                    float rSqr = math.lengthsq(posI - particles[j].position);
-                    if (rSqr < smoothingRadiusSqr)
-                    {
-                        float diff = smoothingRadiusSqr - rSqr;
-                        density += particleMass * poly6Coeff * diff * diff * diff;
-                    }
-                }
-            }
-
-            density = math.max(density, 0.001f);
-            densities[i] = density;
-            pressures[i] = math.max(0f, pressureStiffness * (density - restDensity));
-        }
-    }
-
-    // ─── Forces (parallel, skips sleeping) ───────────────────────
-
-    [BurstCompile]
-    struct ForcesJob : IJobParallelFor
-    {
-        [ReadOnly] public NativeArray<ParticleData> particles;
-        [ReadOnly] public NativeArray<int> sleepState;
-        [ReadOnly] public NativeArray<int> sortedIndices;
-        [ReadOnly] public NativeArray<int> cellCounts;
-        [ReadOnly] public NativeArray<int> cellOffsets;
-        [ReadOnly] public NativeArray<float> densities;
-        [ReadOnly] public NativeArray<float> pressures;
-        [NativeDisableParallelForRestriction] public NativeArray<float2> forces;
-        [ReadOnly] public NativeArray<FluidTypeGPU> fluidTypeData;
-
-        public float cellSize, smoothingRadius, smoothingRadiusSqr, particleMass;
-        public float2 containerMin;
-        public int gridW, gridH;
-        public float nearPressureStiffness;
-        public float cohesionStrength;
-        public float interTypeRepulsion;  // Mild push between different colors
-        public bool uniformFluid;
-        public float spikyGradCoeff, viscLaplCoeff;
-
-        public void Execute(int i)
-        {
-            if (sleepState[i] == 1 || particles[i].alive < 0.5f)
-            {
-                forces[i] = float2.zero;
-                return;
-            }
-
-            var pI = particles[i];
-            int2 cellI = math.clamp(
-                (int2)math.floor((pI.position - containerMin) / cellSize),
-                int2.zero, new int2(gridW - 1, gridH - 1));
-            var typeI = fluidTypeData[pI.typeIndex];
-
-            float2 totalForce = float2.zero;
-
-            for (int dx = -1; dx <= 1; dx++)
-            for (int dy = -1; dy <= 1; dy++)
-            {
-                int2 nc = cellI + new int2(dx, dy);
-                if (nc.x < 0 || nc.x >= gridW || nc.y < 0 || nc.y >= gridH) continue;
-
-                int ci = nc.y * gridW + nc.x;
-                int start = cellOffsets[ci];
-                int count = cellCounts[ci];
+                int start = cellOffsets[ci]; int count = cellCounts[ci];
 
                 for (int s = 0; s < count; s++)
                 {
                     int j = sortedIndices[start + s];
                     if (j == i) continue;
+                    if (particles[j].alive < 0.5f) continue;
 
-                    var pJ = particles[j];
-                    if (pJ.alive < 0.5f) continue;
+                    // Only collide between different bodies (same body uses springs)
+                    if (bodyIndices[j] == bodyI) continue;
 
-                    float2 diff = pI.position - pJ.position;
-                    float rSqr = math.lengthsq(diff);
-                    if (rSqr >= smoothingRadiusSqr || rSqr < 1e-12f) continue;
+                    float2 diff = posI - predictedPos[j];
+                    float distSqr = math.lengthsq(diff);
 
-                    float r = math.sqrt(rSqr);
-                    float2 dir = diff / r;
-
-                    float densityJ = math.max(densities[j], 0.001f);
-
-                    // Pressure — uniform (all particles repel equally for stability)
-                    float gm = SpikyGrad(r);
-                    float pressAvg = (pressures[i] + pressures[j]) * 0.5f;
-                    float2 pF = dir * (-particleMass * pressAvg * gm / densityJ);
-
-                    // Near-pressure — uniform
-                    float nf = 1f - r / smoothingRadius;
-                    float2 nF = dir * (nearPressureStiffness * nf * nf);
-
-                    // Viscosity — uniform (smooths velocity)
-                    var typeJ = fluidTypeData[pJ.typeIndex];
-                    float mu = (typeI.viscosity + typeJ.viscosity) * 0.5f;
-                    float vl = ViscLapl(r);
-                    float2 vF = mu * particleMass * (pJ.velocity - pI.velocity)
-                              / densityJ * vl;
-
-                    // Cohesion — SAME TYPE ONLY: same-colored particles attract.
-                    // This makes each color behave as a distinct fluid that clumps together.
-                    float2 cF = float2.zero;
-                    bool sameType = (pI.typeIndex == pJ.typeIndex);
-
-                    if (sameType)
+                    if (distSqr < collRadSqr && distSqr > 1e-12f)
                     {
-                        float t = r / smoothingRadius;
-                        cF = -dir * typeI.cohesion * cohesionStrength * t * (1f - t) * (1f - t);
+                        float dist = math.sqrt(distSqr);
+                        float overlap = collisionRadius - dist;
+                        float2 dir = diff / dist;
+                        totalPush += dir * overlap * collisionStiffness;
+                        pushCount++;
                     }
-
-                    // Inter-type repulsion — DIFFERENT TYPES ONLY: mild push apart.
-                    // Helps colors stay separated into clean blobs instead of mixing.
-                    float2 rF = float2.zero;
-                    if (!sameType && interTypeRepulsion > 0f)
-                    {
-                        float rf = 1f - r / smoothingRadius;
-                        rF = dir * interTypeRepulsion * rf * rf;
-                    }
-
-                    totalForce += pF + nF + vF + cF + rF;
                 }
             }
 
-            forces[i] = totalForce;
-        }
-
-        float SpikyGrad(float r)
-        {
-            if (r >= smoothingRadius || r < 1e-6f) return 0f;
-            float d = smoothingRadius - r;
-            return spikyGradCoeff * d * d;
-        }
-
-        float ViscLapl(float r)
-        {
-            if (r >= smoothingRadius || r < 1e-6f) return 0f;
-            return viscLaplCoeff * (smoothingRadius - r);
+            if (pushCount > 0)
+                predictedPos[i] = posI + totalPush / pushCount;
         }
     }
 
-    // ─── Integrate (parallel, skips sleeping) ────────────────────
+    // ─── PBD Step 4: Finalize positions + flask suction ──────────
 
     [BurstCompile]
-    struct IntegrateJob : IJobParallelFor
+    struct FinalizeJob : IJobParallelFor
     {
         public NativeArray<ParticleData> particles;
+        [ReadOnly] public NativeArray<float2> predictedPos;
         [ReadOnly] public NativeArray<int> sleepState;
-        [ReadOnly] public NativeArray<float2> forces;
-        [ReadOnly] public NativeArray<float> densities;
-        [ReadOnly] public NativeArray<FluidTypeGPU> fluidTypeData;
 
-        public float2 gravity, containerMin, containerMax;
-        public float dt, velocityDamping, maxSpeed, particleRadius, boundaryDamping;
-        public bool uniformFluid, flaskActive;
-        public float2 flaskPos;
+        public float dt, velocityDamping, maxSpeed;
+        public float particleRadius, boundaryDamping;
+        public float2 containerMin, containerMax;
+        public bool flaskActive; public float2 flaskPos;
         public int flaskTargetType;
         public float flaskRadius, flaskAbsorbRadius, flaskStrength;
 
         public void Execute(int i)
         {
             var p = particles[i];
-            if (p.alive < 0.5f || sleepState[i] == 1) return; // Skip dead and sleeping
+            if (p.alive < 0.5f || sleepState[i] == 1) return;
 
-            var ft = fluidTypeData[p.typeIndex];
-            float gScale = uniformFluid ? 1f : ft.gravityScale;
-            float density = math.max(densities[i], 0.001f);
-            float2 accel = forces[i] / density + gravity * gScale;
+            // PBD velocity update: derive velocity from position change
+            float2 newPos = predictedPos[i];
+            p.velocity = (newPos - p.position) / math.max(dt, 1e-8f);
 
-            p.velocity += accel * dt;
-
-            // Flask suction
+            // Flask suction (applied to velocity before finalization)
             if (flaskActive)
             {
                 bool typeMatch = (flaskTargetType < 0) || (p.typeIndex == flaskTargetType);
                 if (typeMatch)
                 {
-                    float2 toFlask = flaskPos - p.position;
+                    float2 toFlask = flaskPos - newPos;
                     float dist = math.length(toFlask);
                     if (dist < flaskRadius && dist > 0.001f)
                     {
@@ -1205,13 +912,16 @@ public class FluidSimulationJobs : MonoBehaviour
                 }
             }
 
+            // Damping
             p.velocity *= velocityDamping;
 
+            // Speed clamp
             float speedSqr = math.lengthsq(p.velocity);
             if (speedSqr > maxSpeed * maxSpeed)
                 p.velocity *= maxSpeed / math.sqrt(speedSqr);
 
-            p.position += p.velocity * dt;
+            // Final position
+            p.position = newPos;
 
             // Boundaries
             float r = particleRadius;
@@ -1224,7 +934,47 @@ public class FluidSimulationJobs : MonoBehaviour
         }
     }
 
-    // ─── Sleep check (parallel) ──────────────────────────────────
+    // ─── Spring break check ──────────────────────────────────────
+
+    [BurstCompile]
+    struct SpringBreakJob : IJob
+    {
+        public NativeArray<SpringData> springs;
+        [ReadOnly] public NativeArray<ParticleData> particles;
+        public int springCount;
+
+        public void Execute()
+        {
+            for (int s = 0; s < springCount; s++)
+            {
+                var spring = springs[s];
+                if (spring.alive == 0) continue;
+
+                // Break if either particle is dead
+                if (particles[spring.particleA].alive < 0.5f ||
+                    particles[spring.particleB].alive < 0.5f)
+                {
+                    spring.alive = 0;
+                    springs[s] = spring;
+                    continue;
+                }
+
+                // Break if stretched beyond threshold
+                float dist = math.length(
+                    particles[spring.particleA].position -
+                    particles[spring.particleB].position
+                );
+
+                if (dist > spring.restLength * spring.breakThreshold)
+                {
+                    spring.alive = 0;
+                    springs[s] = spring;
+                }
+            }
+        }
+    }
+
+    // ─── Sleep check ─────────────────────────────────────────────
 
     [BurstCompile]
     struct SleepCheckJob : IJobParallelFor
@@ -1237,22 +987,17 @@ public class FluidSimulationJobs : MonoBehaviour
 
         public void Execute(int i)
         {
-            // Only check awake, alive particles
             if (sleepState[i] == 1 || particles[i].alive < 0.5f) return;
 
-            float speedSqr = math.lengthsq(particles[i].velocity);
-
-            if (speedSqr < sleepVelThresholdSqr)
+            if (math.lengthsq(particles[i].velocity) < sleepVelThresholdSqr)
             {
                 sleepCounter[i]++;
                 if (sleepCounter[i] >= sleepFramesRequired)
-                {
-                    sleepState[i] = 1; // Go to sleep
-                }
+                    sleepState[i] = 1;
             }
             else
             {
-                sleepCounter[i] = 0; // Reset counter — still moving
+                sleepCounter[i] = 0;
             }
         }
     }

@@ -9,10 +9,8 @@ using UnityEngine;
 ///   3. Creates FluidTypeDefinition[] with uniform physics but distinct colors
 ///   4. Creates a FluidParticle[] grid that reproduces the image
 ///
-/// FluidSimulationGPU checks for this component and uses its data instead
 /// of the default grid spawn.
 ///
-/// SETUP: Add this component to the same GameObject as FluidSimulationGPU.
 ///        Assign a Texture2D (must have Read/Write enabled in import settings).
 /// </summary>
 public class ImageToFluid : MonoBehaviour
@@ -42,7 +40,6 @@ public class ImageToFluid : MonoBehaviour
     public float uniformViscosity = 6f;
     public float uniformCohesion = 1f;
 
-    // ─── Output Data (read by FluidSimulationGPU) ────────────────
 
     /// <summary>True after Awake if image was successfully processed.</summary>
     public bool IsReady { get; private set; }
@@ -59,7 +56,7 @@ public class ImageToFluid : MonoBehaviour
     /// <summary>Computed particle spacing based on resolution and container size.</summary>
     public float ComputedSpacing { get; private set; }
 
-    // ─── Lifecycle ───────────────────────────────────────────────
+    // ─── Called by FluidSimulationJobs.Awake ────────────────────
 
     public void TryParseImage()
     {

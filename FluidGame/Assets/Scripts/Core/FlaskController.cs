@@ -1,10 +1,7 @@
 using UnityEngine;
 
 /// <summary>
-/// Flask controller for sucking up fluid particles.
-/// Works with both FluidSimulationGPU and FluidSimulationJobs.
-///
-/// SETUP: Add to any GameObject. Finds the active simulation automatically.
+/// Flask controller for sucking up particles. Works with FluidSimulationJobs.
 /// </summary>
 public class FlaskController : MonoBehaviour
 {
@@ -20,56 +17,37 @@ public class FlaskController : MonoBehaviour
     [Header("Target")]
     public int targetTypeIndex = 0;
 
-    // ─── Public State ────────────────────────────────────────────
     public int[] AbsorbedCounts { get; private set; }
     public int TotalAbsorbed { get; private set; }
     public bool IsSucking { get; private set; }
     public Vector2 FlaskWorldPos { get; private set; }
 
-    // ─── Internals ───────────────────────────────────────────────
-    private FluidSimulationJobs jobsSim;
+    private FluidSimulationJobs sim;
     private Camera mainCam;
-    private FluidTypeDefinition[] fluidTypes;
-    private FluidParticle[] particles;
-    private int particleCount;
-    private int lastCountFrame = -1;
 
     void Start()
     {
         mainCam = Camera.main;
+        sim = FindObjectOfType<FluidSimulationJobs>();
 
-        jobsSim = FindObjectOfType<FluidSimulationJobs>();
-
-        if (jobsSim != null && jobsSim.enabled)
+        if (sim == null || !sim.enabled)
         {
-            fluidTypes = jobsSim.fluidTypes;
-            particleCount = jobsSim.ParticleCount;
-        }
-        else
-        {
-            Debug.LogError("[FlaskController] No active simulation found!");
+            Debug.LogError("[FlaskController] No active FluidSimulationJobs found!");
             enabled = false;
             return;
         }
 
-        AbsorbedCounts = new int[Mathf.Max(fluidTypes.Length, 1)];
+        AbsorbedCounts = new int[Mathf.Max(sim.fluidTypes.Length, 1)];
     }
 
     void Update()
     {
         UpdateFlaskPosition();
         IsSucking = Input.GetMouseButton(0);
+        PassToSim();
 
-        // Pass suction data to whichever sim is active
-        if (jobsSim != null && jobsSim.enabled)
-            PassToJobs();
-
-        // Count absorbed periodically
-        if (Time.frameCount % 15 == 0 && Time.frameCount != lastCountFrame)
-        {
+        if (Time.frameCount % 15 == 0)
             CountAbsorbed();
-            lastCountFrame = Time.frameCount;
-        }
     }
 
     void UpdateFlaskPosition()
@@ -80,34 +58,28 @@ public class FlaskController : MonoBehaviour
         FlaskWorldPos = new Vector2(worldPos.x, worldPos.y);
     }
 
-    void PassToJobs()
+    void PassToSim()
     {
-        jobsSim.flaskActive = IsSucking;
-        jobsSim.flaskPos = new Unity.Mathematics.float2(FlaskWorldPos.x, FlaskWorldPos.y);
-        jobsSim.flaskTargetType = targetTypeIndex;
-        jobsSim.flaskRadius = suctionRadius;
-        jobsSim.flaskAbsorbRadius = absorbRadius;
-        jobsSim.flaskStrength = suctionStrength;
+        sim.flaskActive = IsSucking;
+        sim.flaskPos = new Unity.Mathematics.float2(FlaskWorldPos.x, FlaskWorldPos.y);
+        sim.flaskTargetType = targetTypeIndex;
+        sim.flaskRadius = suctionRadius;
+        sim.flaskAbsorbRadius = absorbRadius;
+        sim.flaskStrength = suctionStrength;
     }
 
     void CountAbsorbed()
     {
-        FluidParticle[] p = null;
-        int count = 0;
-
-        if (jobsSim != null && jobsSim.enabled && jobsSim.Particles != null)
-        { p = jobsSim.Particles; count = jobsSim.ParticleCount; }
-
-        if (p == null) return;
+        if (sim.Particles == null) return;
 
         for (int i = 0; i < AbsorbedCounts.Length; i++) AbsorbedCounts[i] = 0;
         TotalAbsorbed = 0;
 
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < sim.ParticleCount; i++)
         {
-            if (p[i].alive < 0.5f)
+            if (sim.Particles[i].alive < 0.5f)
             {
-                int t = p[i].typeIndex;
+                int t = sim.Particles[i].typeIndex;
                 if (t >= 0 && t < AbsorbedCounts.Length) AbsorbedCounts[t]++;
                 TotalAbsorbed++;
             }

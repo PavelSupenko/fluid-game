@@ -2,12 +2,12 @@ using UnityEngine;
 
 /// <summary>
 /// Draws the container boundary as visible lines in both Game and Scene views.
-/// Works with both FluidSimulation (CPU) and FluidSimulationGPU.
+/// Works with both FluidSimulation (CPU) and FluidSimulationJobs.
 /// </summary>
 public class ContainerBoundsRenderer : MonoBehaviour
 {
     [Tooltip("Color of the container outline")]
-    public Color lineColor = Color.green;
+    public Color lineColor = Color.yellow;
 
     [Tooltip("Slight inward offset so the line doesn't clip at screen edge")]
     public float inset = 0.02f;
@@ -21,14 +21,12 @@ public class ContainerBoundsRenderer : MonoBehaviour
     {
         CreateLineMaterial();
 
-        // Try Jobs sim, then GPU sim, then legacy CPU sim
-        var jobs = GetComponent<FluidSimulationJobs>();
-        if (jobs != null)
+        var sim = GetComponent<FluidSimulationJobs>();
+        if (sim != null)
         {
-            containerMin = jobs.containerMin;
-            containerMax = jobs.containerMax;
+            containerMin = sim.containerMin;
+            containerMax = sim.containerMax;
             initialized = true;
-            return;
         }
     }
 

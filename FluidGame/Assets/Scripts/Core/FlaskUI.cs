@@ -2,9 +2,6 @@ using UnityEngine;
 
 /// <summary>
 /// UI for flask color selection and absorbed particle counts.
-/// Works with both FluidSimulationGPU and FluidSimulationJobs.
-///
-/// SETUP: Add to any GameObject in the scene. Finds FlaskController automatically.
 /// </summary>
 public class FlaskUI : MonoBehaviour
 {
@@ -16,8 +13,6 @@ public class FlaskUI : MonoBehaviour
     [Header("Cursor Indicator")]
     public bool showSuctionRadius = true;
 
-    // ─── Internals ───────────────────────────────────────────────
-
     private FlaskController flask;
     private FluidTypeDefinition[] fluidTypes;
     private Material circleMaterial;
@@ -27,37 +22,23 @@ public class FlaskUI : MonoBehaviour
     void Start()
     {
         flask = FindObjectOfType<FlaskController>();
-        if (flask == null)
-        {
-            Debug.LogError("[FlaskUI] FlaskController not found!");
-            enabled = false;
-            return;
-        }
+        if (flask == null) { enabled = false; return; }
 
-        // Find fluid types from whichever simulation is active
-        var jobs = FindObjectOfType<FluidSimulationJobs>();
-        if (jobs != null && jobs.enabled)
-            fluidTypes = jobs.fluidTypes;
+        var sim = FindObjectOfType<FluidSimulationJobs>();
+        if (sim != null && sim.enabled)
+            fluidTypes = sim.fluidTypes;
 
-        if (fluidTypes == null || fluidTypes.Length == 0)
-        {
-            Debug.LogError("[FlaskUI] No fluid types found!");
-            enabled = false;
-            return;
-        }
+        if (fluidTypes == null || fluidTypes.Length == 0) { enabled = false; return; }
 
         BuildColorTextures();
         CreateCircleMaterial();
     }
-
-    // ─── Color Button Textures ───────────────────────────────────
 
     void BuildColorTextures()
     {
         colorTextures = new Texture2D[fluidTypes.Length];
         for (int i = 0; i < fluidTypes.Length; i++)
             colorTextures[i] = MakeSolidTexture(fluidTypes[i].color);
-
         selectedBorderTex = MakeSolidTexture(Color.white);
     }
 
@@ -69,24 +50,17 @@ public class FlaskUI : MonoBehaviour
         return tex;
     }
 
-    // ─── IMGUI ───────────────────────────────────────────────────
-
     void OnGUI()
     {
         if (flask == null || fluidTypes == null) return;
 
         int count = fluidTypes.Length;
-
         float totalWidth = count * (buttonWidth + 10) - 10;
         float startX = (Screen.width - totalWidth) * 0.5f;
         float y = Screen.height - buttonHeight - bottomMargin;
 
         var countStyle = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.MiddleCenter,
-            fontSize = 14,
-            fontStyle = FontStyle.Bold
-        };
+        { alignment = TextAnchor.MiddleCenter, fontSize = 14, fontStyle = FontStyle.Bold };
         countStyle.normal.textColor = Color.white;
 
         var shadowStyle = new GUIStyle(countStyle);
@@ -97,48 +71,31 @@ public class FlaskUI : MonoBehaviour
             float x = startX + i * (buttonWidth + 10);
             Rect btnRect = new Rect(x, y, buttonWidth, buttonHeight);
 
-            bool isSelected = (flask.targetTypeIndex == i);
+            if (flask.targetTypeIndex == i)
+                GUI.DrawTexture(new Rect(x - 3, y - 3, buttonWidth + 6, buttonHeight + 6), selectedBorderTex);
 
-            // Selection border
-            if (isSelected)
-            {
-                Rect borderRect = new Rect(x - 3, y - 3, buttonWidth + 6, buttonHeight + 6);
-                GUI.DrawTexture(borderRect, selectedBorderTex);
-            }
-
-            // Color background
             GUI.DrawTexture(btnRect, colorTextures[i]);
 
-            // Absorbed count
             int absorbed = (flask.AbsorbedCounts != null && i < flask.AbsorbedCounts.Length)
                 ? flask.AbsorbedCounts[i] : 0;
 
-            Rect shadowRect = new Rect(btnRect.x + 1, btnRect.y + 1, btnRect.width, btnRect.height);
-            GUI.Label(shadowRect, absorbed.ToString(), shadowStyle);
+            GUI.Label(new Rect(btnRect.x + 1, btnRect.y + 1, btnRect.width, btnRect.height),
+                      absorbed.ToString(), shadowStyle);
             GUI.Label(btnRect, absorbed.ToString(), countStyle);
 
-            // Click detection
             if (GUI.Button(btnRect, GUIContent.none, GUIStyle.none))
                 flask.SetTargetType(i);
         }
 
-        // Instructions
         var instrStyle = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.MiddleCenter,
-            fontSize = 13
-        };
+        { alignment = TextAnchor.MiddleCenter, fontSize = 13 };
         instrStyle.normal.textColor = new Color(1, 1, 1, 0.6f);
 
-        Rect instrRect = new Rect(0, y - 30, Screen.width, 25);
         string typeName = (flask.targetTypeIndex >= 0 && flask.targetTypeIndex < fluidTypes.Length)
             ? fluidTypes[flask.targetTypeIndex].name : "???";
-        GUI.Label(instrRect,
-            $"Selected: {typeName}  |  Hold LMB to suck  |  Total absorbed: {flask.TotalAbsorbed}",
-            instrStyle);
+        GUI.Label(new Rect(0, y - 30, Screen.width, 25),
+            $"Selected: {typeName}  |  Hold LMB to suck  |  Total: {flask.TotalAbsorbed}", instrStyle);
     }
-
-    // ─── Cursor Indicator ────────────────────────────────────────
 
     void CreateCircleMaterial()
     {
@@ -154,8 +111,7 @@ public class FlaskUI : MonoBehaviour
 
     void OnRenderObject()
     {
-        if (!showSuctionRadius || flask == null || circleMaterial == null) return;
-        if (!flask.IsSucking) return;
+        if (!showSuctionRadius || flask == null || circleMaterial == null || !flask.IsSucking) return;
 
         circleMaterial.SetPass(0);
         GL.PushMatrix();
@@ -165,11 +121,8 @@ public class FlaskUI : MonoBehaviour
         if (flask.targetTypeIndex >= 0 && flask.targetTypeIndex < fluidTypes.Length)
             ringColor = fluidTypes[flask.targetTypeIndex].color;
 
-        // Outer ring
         ringColor.a = 0.6f;
         DrawCircle(flask.FlaskWorldPos, flask.suctionRadius, ringColor, 48);
-
-        // Inner ring
         ringColor.a = 0.9f;
         DrawCircle(flask.FlaskWorldPos, flask.absorbRadius, ringColor, 24);
 
@@ -178,13 +131,11 @@ public class FlaskUI : MonoBehaviour
 
     void DrawCircle(Vector2 center, float radius, Color color, int segments)
     {
-        GL.Begin(GL.LINES);
-        GL.Color(color);
+        GL.Begin(GL.LINES); GL.Color(color);
         float step = 2f * Mathf.PI / segments;
         for (int i = 0; i < segments; i++)
         {
-            float a0 = i * step;
-            float a1 = (i + 1) * step;
+            float a0 = i * step, a1 = (i + 1) * step;
             GL.Vertex3(center.x + Mathf.Cos(a0) * radius, center.y + Mathf.Sin(a0) * radius, 0f);
             GL.Vertex3(center.x + Mathf.Cos(a1) * radius, center.y + Mathf.Sin(a1) * radius, 0f);
         }
@@ -193,9 +144,7 @@ public class FlaskUI : MonoBehaviour
 
     void OnDestroy()
     {
-        if (colorTextures != null)
-            foreach (var t in colorTextures)
-                if (t != null) DestroyImmediate(t);
+        if (colorTextures != null) foreach (var t in colorTextures) if (t != null) DestroyImmediate(t);
         if (selectedBorderTex != null) DestroyImmediate(selectedBorderTex);
         if (circleMaterial != null) DestroyImmediate(circleMaterial);
     }

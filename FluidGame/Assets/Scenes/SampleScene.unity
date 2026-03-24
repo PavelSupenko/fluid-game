@@ -499,42 +499,29 @@ MonoBehaviour:
   particleSpacing: 0.15
   particleRadius: 0.05
   smoothingRadius: 0.4
-  particleMass: 1.5
-  restDensity: 50
-  autoRestDensity: 1
-  pressureStiffness: 80
-  nearPressureStiffness: 5
-  cohesionStrength: 15
-  interTypeRepulsion: 8
-  surfaceTensionStrength: 5
-  uniformFluid: 1
-  gravity: {x: 0, y: -5}
+  springStiffness: 0.3
+  constraintIterations: 4
+  collisionStiffness: 0.5
+  collisionRadius: 0.08
+  gravity: {x: 0, y: -9.81}
   boundaryDamping: 0.3
   velocityDamping: 0.98
-  timeScale: 3
+  timeScale: 1
   subSteps: 3
-  maxSpeed: 0.5
-  sleepVelocityThreshold: 0.22
-  sleepFramesRequired: 10
-  wakeBudgetPerFrame: 50
+  maxSpeed: 8
+  sleepVelocityThreshold: 0.05
+  sleepFramesRequired: 30
+  wakeBudgetPerFrame: 150
   wakeRadius: 1.5
   startSleeping: 1
+  scanBudgetPerFrame: 400
   fluidTypes:
-  - name: Heavy (Red)
-    color: {r: 0.9, g: 0.2, b: 0.15, a: 1}
-    density: 3
-    viscosity: 8
-    cohesion: 1
-  - name: Medium (Green)
-    color: {r: 0.2, g: 0.85, b: 0.3, a: 1}
+  - name: Default
+    color: {r: 1, g: 1, b: 1, a: 1}
     density: 2
-    viscosity: 5
-    cohesion: 0.8
-  - name: Light (Blue)
-    color: {r: 0.2, g: 0.4, b: 0.95, a: 1}
-    density: 1
-    viscosity: 2
-    cohesion: 0.6
+    viscosity: 6
+    cohesion: 1
+  uniformFluid: 0
   flaskPos:
     x: 0
     y: 0
@@ -543,7 +530,6 @@ MonoBehaviour:
   flaskRadius: 1
   flaskAbsorbRadius: 0.15
   flaskStrength: 80
-  scanBudgetPerFrame: 400
 --- !u!114 &1807844261
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -556,7 +542,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 0887febee84e4fd38c087cbd093cf9b1, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  maskTexture: {fileID: 2800000, guid: 785c9aadd3b8c44adb1ca276679dd3f6, type: 3}
+  maskTexture: {fileID: 2800000, guid: 1698e04759fe646589c62015577222d7, type: 3}
   connectionRings: 1
   defaultBreakThreshold: 2.5
   maskColorThreshold: 0.1

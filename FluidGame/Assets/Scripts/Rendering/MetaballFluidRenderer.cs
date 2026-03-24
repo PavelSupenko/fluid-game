@@ -97,18 +97,17 @@ public class MetaballFluidRenderer : MonoBehaviour
     void Start()
     {
         cam = GetComponent<Camera>();
-        // Find whichever simulation is active
-        var jobs = FindObjectOfType<FluidSimulationJobs>();
 
-        if (jobs != null && jobs.enabled)
+        var sim = FindObjectOfType<FluidSimulationJobs>();
+        if (sim != null && sim.enabled)
         {
-            simParticleBuffer = jobs.ParticleBuffer;
-            simParticleCount = jobs.ParticleCount;
-            simFluidTypes = jobs.fluidTypes;
+            simParticleBuffer = sim.ParticleBuffer;
+            simParticleCount = sim.ParticleCount;
+            simFluidTypes = sim.fluidTypes;
         }
         else
         {
-            Debug.LogError("[MetaballRenderer] No active simulation found!");
+            Debug.LogError("[MetaballRenderer] No active FluidSimulationJobs found!");
             enabled = false;
             return;
         }

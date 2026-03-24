@@ -45,12 +45,12 @@ public class FluidRendererGPU : MonoBehaviour
     {
         if (!showParticles || particleMaterial == null) return;
 
-        // Find particle buffer from whichever sim is active
+        // Find particle buffer from the simulation
         if (particleBufferRef == null)
         {
-            var jobs = FindObjectOfType<FluidSimulationJobs>();
-            if (jobs != null && jobs.enabled && jobs.ParticleBuffer != null)
-            { particleBufferRef = jobs.ParticleBuffer; particleCount = jobs.ParticleCount; }
+            var sim = FindObjectOfType<FluidSimulationJobs>();
+            if (sim != null && sim.enabled && sim.ParticleBuffer != null)
+            { particleBufferRef = sim.ParticleBuffer; particleCount = sim.ParticleCount; }
 
             if (particleBufferRef == null) return;
         }

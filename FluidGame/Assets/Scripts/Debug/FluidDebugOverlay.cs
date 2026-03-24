@@ -1,96 +1,44 @@
 using UnityEngine;
 
 /// <summary>
-/// Displays simulation diagnostics: particle count, FPS, and SPH density stats.
-/// Works with FluidSimulation (legacy CPU), FluidSimulationGPU, and FluidSimulationJobs.
+/// Displays simulation diagnostics: particle count, FPS, awake count, soft body info.
 /// </summary>
 public class FluidDebugOverlay : MonoBehaviour
 {
-    private FluidParticle[] particles;
-    private int particleCount;
-    private string modeName = "None";
-
-    private float fps;
-    private float fpsTimer;
-    private float avgDensity;
-    private float maxDensity;
-    private float statsTimer;
-    private const float STATS_INTERVAL = 0.25f;
-
-    // Cached references
-    private FluidSimulationJobs jobsSim;
+    private FluidSimulationJobs sim;
+    private float fps, fpsTimer;
 
     void Start()
     {
-        jobsSim = FindObjectOfType<FluidSimulationJobs>();
+        sim = FindObjectOfType<FluidSimulationJobs>();
     }
 
     void Update()
     {
         fpsTimer += (Time.unscaledDeltaTime - fpsTimer) * 0.1f;
         fps = 1f / fpsTimer;
-
-        statsTimer -= Time.unscaledDeltaTime;
-        if (statsTimer <= 0f)
-        {
-            statsTimer = STATS_INTERVAL;
-            RefreshParticleRef();
-            ComputeDensityStats();
-        }
-    }
-
-    void RefreshParticleRef()
-    {
-        if (jobsSim != null && jobsSim.enabled && jobsSim.Particles != null)
-        {
-            particles = jobsSim.Particles;
-            particleCount = jobsSim.ParticleCount;
-            modeName = "Jobs+Burst";
-        }
-    }
-
-    void ComputeDensityStats()
-    {
-        if (particles == null || particleCount == 0) return;
-
-        float sum = 0f;
-        float max = 0f;
-
-        for (int i = 0; i < particleCount; i++)
-        {
-            float d = particles[i].density;
-            sum += d;
-            if (d > max) max = d;
-        }
-
-        avgDensity = sum / particleCount;
-        maxDensity = max;
     }
 
     void OnGUI()
     {
         var style = new GUIStyle(GUI.skin.label)
-        {
-            fontSize = 16,
-            fontStyle = FontStyle.Bold
-        };
+            { fontSize = 16, fontStyle = FontStyle.Bold };
         style.normal.textColor = Color.white;
 
-        GUILayout.BeginArea(new Rect(10, 10, 400, 220));
-        GUILayout.Label($"Mode: {modeName}", style);
-        GUILayout.Label($"Particles: {particleCount}", style);
+        int count = sim != null ? sim.ParticleCount : 0;
 
-        // Show awake count and soft body info for Jobs sim
-        if (jobsSim != null && jobsSim.enabled)
+        GUILayout.BeginArea(new Rect(10, 10, 400, 200));
+        GUILayout.Label($"Mode: PBD Soft Body (Jobs+Burst)", style);
+        GUILayout.Label($"Particles: {count}", style);
+
+        if (sim != null && sim.enabled)
         {
-            GUILayout.Label($"Awake: {jobsSim.AwakeCount} ({(particleCount > 0 ? jobsSim.AwakeCount * 100 / particleCount : 0)}%)", style);
-            if (jobsSim.HasSoftBodies)
-                GUILayout.Label($"Bodies: {jobsSim.BodyCount}  Springs: {jobsSim.SpringCount}", style);
+            GUILayout.Label($"Awake: {sim.AwakeCount} ({(count > 0 ? sim.AwakeCount * 100 / count : 0)}%)", style);
+            if (sim.HasSoftBodies)
+                GUILayout.Label($"Bodies: {sim.BodyCount}  Springs: {sim.SpringCount}", style);
         }
 
         GUILayout.Label($"FPS: {fps:F0}", style);
-        GUILayout.Label($"Avg Density: {avgDensity:F1}", style);
-        GUILayout.Label($"Max Density: {maxDensity:F1}", style);
         GUILayout.EndArea();
     }
 }
