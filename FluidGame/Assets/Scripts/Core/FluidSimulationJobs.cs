@@ -725,6 +725,7 @@ public class FluidSimulationJobs : MonoBehaviour
             particleMass = particleMass,
             nearPressureStiffness = nearPressureStiffness,
             cohesionStrength = cohesionStrength,
+            interTypeRepulsion = interTypeRepulsion,
             uniformFluid = uniformFluid,
             spikyGradCoeff = -10f / (math.PI * math.pow(smoothingRadius, 5)),
             viscLaplCoeff = 40f / (math.PI * math.pow(smoothingRadius, 5))
@@ -971,6 +972,7 @@ public class FluidSimulationJobs : MonoBehaviour
         public int gridW, gridH;
         public float nearPressureStiffness;
         public float cohesionStrength;
+        public float interTypeRepulsion;  // Mild push between different colors
         public bool uniformFluid;
         public float spikyGradCoeff, viscLaplCoeff;
 
@@ -1017,30 +1019,43 @@ public class FluidSimulationJobs : MonoBehaviour
 
                     float densityJ = math.max(densities[j], 0.001f);
 
-                    // Pressure (Spiky gradient)
+                    // Pressure — uniform (all particles repel equally for stability)
                     float gm = SpikyGrad(r);
                     float pressAvg = (pressures[i] + pressures[j]) * 0.5f;
                     float2 pF = dir * (-particleMass * pressAvg * gm / densityJ);
 
-                    // Near-pressure repulsion
+                    // Near-pressure — uniform
                     float nf = 1f - r / smoothingRadius;
                     float2 nF = dir * (nearPressureStiffness * nf * nf);
 
-                    // Viscosity — cheap, makes it feel like liquid not sand
+                    // Viscosity — uniform (smooths velocity)
                     var typeJ = fluidTypeData[pJ.typeIndex];
                     float mu = (typeI.viscosity + typeJ.viscosity) * 0.5f;
                     float vl = ViscLapl(r);
                     float2 vF = mu * particleMass * (pJ.velocity - pI.velocity)
                               / densityJ * vl;
 
-                    // Cohesion — all particles attract (uniformFluid)
+                    // Cohesion — SAME TYPE ONLY: same-colored particles attract.
+                    // This makes each color behave as a distinct fluid that clumps together.
                     float2 cF = float2.zero;
+                    bool sameType = (pI.typeIndex == pJ.typeIndex);
+
+                    if (sameType)
                     {
                         float t = r / smoothingRadius;
                         cF = -dir * typeI.cohesion * cohesionStrength * t * (1f - t) * (1f - t);
                     }
 
-                    totalForce += pF + nF + vF + cF;
+                    // Inter-type repulsion — DIFFERENT TYPES ONLY: mild push apart.
+                    // Helps colors stay separated into clean blobs instead of mixing.
+                    float2 rF = float2.zero;
+                    if (!sameType && interTypeRepulsion > 0f)
+                    {
+                        float rf = 1f - r / smoothingRadius;
+                        rF = dir * interTypeRepulsion * rf * rf;
+                    }
+
+                    totalForce += pF + nF + vF + cF + rF;
                 }
             }
 
