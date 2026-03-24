@@ -574,7 +574,7 @@ MonoBehaviour:
   interTypeRepulsion: 8
   surfaceTensionStrength: 5
   uniformFluid: 0
-  gravity: {x: 0, y: -7}
+  gravity: {x: 0, y: -3}
   boundaryDamping: 0.3
   velocityDamping: 0.98
   timeScale: 1

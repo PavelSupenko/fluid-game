@@ -169,7 +169,7 @@ public class FluidSimulationJobs : MonoBehaviour
         if (flaskActive)
         {
             WakeNearPoint(flaskPos, wakeRadius);
-            WakeColumnAbove(flaskPos);
+            // WakeColumnAbove(flaskPos);
         }
 
         CascadeWake();
@@ -420,7 +420,6 @@ public class FluidSimulationJobs : MonoBehaviour
         int wakeBudget = wakeBudgetPerFrame;
         float radiusSqr = radius * radius;
 
-        // Determine which grid cells overlap the wake radius
         int2 minCell = CellCoord(point - new float2(radius, radius));
         int2 maxCell = CellCoord(point + new float2(radius, radius));
 
@@ -438,6 +437,12 @@ public class FluidSimulationJobs : MonoBehaviour
                 int i = sortedIndices[start + s];
                 if (sleepState[i] == 0) continue;
                 if (particles[i].alive < 0.5f) continue;
+
+                // Only wake particles matching the flask target type.
+                // Non-matching particles stay asleep — they'll wake via
+                // cascade when absorbed neighbors start moving nearby.
+                bool typeMatch = (flaskTargetType < 0) || (particles[i].typeIndex == flaskTargetType);
+                if (!typeMatch) continue;
 
                 if (math.lengthsq(particles[i].position - point) < radiusSqr)
                 {
@@ -482,7 +487,10 @@ public class FluidSimulationJobs : MonoBehaviour
                 if (sleepState[i] != 1) continue;
                 if (particles[i].alive < 0.5f) continue;
 
-                // Must be within horizontal range of the column
+                // Only wake matching type — others wake via cascade/islands
+                bool typeMatch = (flaskTargetType < 0) || (particles[i].typeIndex == flaskTargetType);
+                if (!typeMatch) continue;
+
                 float dx = particles[i].position.x - point.x;
                 if (dx * dx < halfWidth * halfWidth)
                 {
