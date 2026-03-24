@@ -56,6 +56,19 @@ public class ImageToFluid : MonoBehaviour
     /// <summary>Computed particle spacing based on resolution and container size.</summary>
     public float ComputedSpacing { get; private set; }
 
+    /// <summary>Sampled image width in particles.</summary>
+    public int SampleWidth { get; private set; }
+
+    /// <summary>Sampled image height in particles.</summary>
+    public int SampleHeight { get; private set; }
+
+    /// <summary>Per-pixel typeIndex grid (sampleW × sampleH), -1 for transparent pixels.
+    /// Row-major: index = y * SampleWidth + x.</summary>
+    public int[] PixelTypeGrid { get; private set; }
+
+    /// <summary>Per-pixel particle index (sampleW × sampleH), -1 if no particle at this pixel.</summary>
+    public int[] PixelToParticle { get; private set; }
+
     // ─── Called by FluidSimulationJobs.Awake ────────────────────
 
     public void TryParseImage()
@@ -133,8 +146,19 @@ public class ImageToFluid : MonoBehaviour
 
         Debug.Log($"[ImageToFluid] Sampled to {sampleW}x{sampleH} = {sampledPixels.Length} samples");
 
+        // Store sample dimensions for SoftBodySetup
+        SampleWidth = sampleW;
+        SampleHeight = sampleH;
+
         // ── Step 3: Quantize colors ──
         var result = ColorQuantizer.Quantize(sampledPixels, targetColorCount, minColorPercentage);
+
+        // Build per-pixel type grid: typeIndex for opaque pixels, -1 for transparent
+        PixelTypeGrid = new int[sampleW * sampleH];
+        for (int i = 0; i < sampledPixels.Length; i++)
+        {
+            PixelTypeGrid[i] = (sampledPixels[i].a > 0.1f) ? result.assignments[i] : -1;
+        }
 
         // ── Step 4: Create fluid type definitions (uniform physics, different colors) ──
         GeneratedFluidTypes = new FluidTypeDefinition[result.palette.Length];
@@ -194,6 +218,9 @@ public class ImageToFluid : MonoBehaviour
         }
 
         GeneratedParticles = new FluidParticle[count];
+        PixelToParticle = new int[sampleW * sampleH];
+        for (int i = 0; i < PixelToParticle.Length; i++) PixelToParticle[i] = -1;
+
         int idx = 0;
 
         for (int y = 0; y < sampleH; y++)
@@ -204,6 +231,7 @@ public class ImageToFluid : MonoBehaviour
                 if (sampledPixels[si].a <= 0.1f) continue;
 
                 int typeIdx = result.assignments[si];
+                PixelToParticle[si] = idx; // Map pixel → particle index
 
                 GeneratedParticles[idx] = new FluidParticle
                 {

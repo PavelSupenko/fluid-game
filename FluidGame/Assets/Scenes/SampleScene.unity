@@ -542,10 +542,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 0887febee84e4fd38c087cbd093cf9b1, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  maskTexture: {fileID: 2800000, guid: 1698e04759fe646589c62015577222d7, type: 3}
+  autoSegmentByColor: 0
+  minRegionSize: 10
+  maskTexture: {fileID: 2800000, guid: 785c9aadd3b8c44adb1ca276679dd3f6, type: 3}
+  maskColorThreshold: 0.1
   connectionRings: 1
   defaultBreakThreshold: 2.5
-  maskColorThreshold: 0.1
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
