@@ -92,7 +92,7 @@ public class FluidDebugOverlay : MonoBehaviour
         };
         style.normal.textColor = Color.black;
 
-        GUILayout.BeginArea(new Rect(10, 100, 350, 160));
+        GUILayout.BeginArea(new Rect(10, 150, 350, 180));
         GUILayout.Label($"Mode: {modeName}", style);
         GUILayout.Label($"Particles: {particleCount}", style);
 

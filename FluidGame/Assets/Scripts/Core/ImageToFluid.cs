@@ -26,6 +26,11 @@ public class ImageToFluid : MonoBehaviour
     [Range(2, 16)]
     public int targetColorCount = 8;
 
+    [Tooltip("Colors occupying less than this % of pixels are merged into their nearest major color. " +
+             "Eliminates compression artifacts and tiny color slivers.")]
+    [Range(0f, 20f)]
+    public float minColorPercentage = 5f;
+
     [Header("Particle Resolution")]
     [Tooltip("Max particles along the wider image axis. Total particles = this² (roughly).")]
     [Range(20, 200)]
@@ -80,6 +85,13 @@ public class ImageToFluid : MonoBehaviour
             pixels = sourceImage.GetPixels();
             imgWidth = sourceImage.width;
             imgHeight = sourceImage.height;
+
+            // GetPixels() on sRGB textures returns linear-space colors.
+            // Convert back to gamma space so the fluid matches the original image brightness.
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                pixels[i] = pixels[i].gamma;
+            }
         }
         catch (System.Exception e)
         {
@@ -125,7 +137,7 @@ public class ImageToFluid : MonoBehaviour
         Debug.Log($"[ImageToFluid] Sampled to {sampleW}x{sampleH} = {sampledPixels.Length} samples");
 
         // ── Step 3: Quantize colors ──
-        var result = ColorQuantizer.Quantize(sampledPixels, targetColorCount);
+        var result = ColorQuantizer.Quantize(sampledPixels, targetColorCount, minColorPercentage);
 
         // ── Step 4: Create fluid type definitions (uniform physics, different colors) ──
         GeneratedFluidTypes = new FluidTypeDefinition[result.palette.Length];
@@ -142,14 +154,21 @@ public class ImageToFluid : MonoBehaviour
         }
 
         // ── Step 5: Determine container-relative positioning ──
-        // Read container bounds from the simulation component
-        var sim = GetComponent<FluidSimulationGPU>();
+        // Read container bounds from whichever simulation is present
         Vector2 containerMin, containerMax;
 
-        if (sim != null)
+        var gpuSim = GetComponent<FluidSimulationGPU>();
+        var jobsSim = GetComponent<FluidSimulationJobs>();
+
+        if (gpuSim != null)
         {
-            containerMin = sim.containerMin;
-            containerMax = sim.containerMax;
+            containerMin = gpuSim.containerMin;
+            containerMax = gpuSim.containerMax;
+        }
+        else if (jobsSim != null)
+        {
+            containerMin = jobsSim.containerMin;
+            containerMax = jobsSim.containerMax;
         }
         else
         {
@@ -160,21 +179,21 @@ public class ImageToFluid : MonoBehaviour
         float containerW = containerMax.x - containerMin.x;
         float containerH = containerMax.y - containerMin.y;
 
-        // Fit the image centered in the container with some margin
+        // Fit the image in the container with small margin on sides
         float margin = 0.2f;
         float availW = containerW - margin * 2f;
-        float availH = containerH - margin * 2f;
+        float availH = containerH - margin;  // No top margin needed, bottom flush
 
         // Compute spacing so the image fits within available space
         float spacingX = availW / sampleW;
         float spacingY = availH / sampleH;
         ComputedSpacing = Mathf.Min(spacingX, spacingY);
 
-        // Center the image in the container
+        // Center horizontally, align BOTTOM of image to container bottom
         float totalW = sampleW * ComputedSpacing;
         float totalH = sampleH * ComputedSpacing;
         float originX = containerMin.x + (containerW - totalW) * 0.5f + ComputedSpacing * 0.5f;
-        float originY = containerMin.y + (containerH - totalH) * 0.5f + ComputedSpacing * 0.5f;
+        float originY = containerMin.y + ComputedSpacing * 0.5f; // Bottom-aligned
 
         // ── Step 6: Create particles ──
         // First pass: count non-transparent pixels

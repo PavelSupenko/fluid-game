@@ -27,7 +27,11 @@ public static class ColorQuantizer
     /// </summary>
     /// <param name="pixels">Input pixel colors (e.g. from Texture2D.GetPixels)</param>
     /// <param name="targetColors">Desired palette size (e.g. 8 or 16)</param>
-    public static QuantizeResult Quantize(Color[] pixels, int targetColors)
+    /// <param name="pixels">Input pixel colors</param>
+    /// <param name="targetColors">Desired palette size (e.g. 8 or 16)</param>
+    /// <param name="minPercentage">Colors occupying less than this % of pixels get merged
+    /// into their nearest surviving color. 0 = keep all.</param>
+    public static QuantizeResult Quantize(Color[] pixels, int targetColors, float minPercentage = 0f)
     {
         targetColors = Mathf.Clamp(targetColors, 2, 32);
 
@@ -39,6 +43,8 @@ public static class ColorQuantizer
                 indices.Add(i);
         }
 
+        int opaqueCount = indices.Count;
+
         // Start with one box containing all pixels
         var boxes = new List<ColorBox>();
         boxes.Add(new ColorBox(pixels, indices));
@@ -46,7 +52,6 @@ public static class ColorQuantizer
         // Repeatedly split the box with the largest range until we have enough
         while (boxes.Count < targetColors)
         {
-            // Find the box with the widest color range
             int bestIdx = 0;
             float bestRange = 0f;
             for (int i = 0; i < boxes.Count; i++)
@@ -59,10 +64,8 @@ public static class ColorQuantizer
                 }
             }
 
-            // If no box can be split further, stop early
             if (bestRange < 0.001f) break;
 
-            // Split the widest box along its widest channel
             var toSplit = boxes[bestIdx];
             boxes.RemoveAt(bestIdx);
 
@@ -71,27 +74,98 @@ public static class ColorQuantizer
             if (boxB.pixelIndices.Count > 0) boxes.Add(boxB);
         }
 
-        // Build palette from box averages
-        Color[] palette = new Color[boxes.Count];
+        // Build initial palette from box averages
+        Color[] rawPalette = new Color[boxes.Count];
         for (int i = 0; i < boxes.Count; i++)
-        {
-            palette[i] = boxes[i].GetAverageColor();
-        }
+            rawPalette[i] = boxes[i].GetAverageColor();
 
-        // Assign each pixel to its nearest palette color
-        int[] assignments = new int[pixels.Length];
+        // Assign each pixel to its nearest color in the raw palette
+        int[] rawAssignments = new int[pixels.Length];
         for (int i = 0; i < pixels.Length; i++)
+            rawAssignments[i] = FindNearestColor(pixels[i], rawPalette);
+
+        // ── Filter rare colors ──
+        // Count how many pixels belong to each palette color
+        if (minPercentage > 0f && opaqueCount > 0)
         {
-            assignments[i] = FindNearestColor(pixels[i], palette);
+            int[] colorCounts = new int[rawPalette.Length];
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                if (pixels[i].a > 0.1f)
+                    colorCounts[rawAssignments[i]]++;
+            }
+
+            float minCount = opaqueCount * (minPercentage / 100f);
+
+            // Mark which colors survive
+            bool[] survives = new bool[rawPalette.Length];
+            int survivorCount = 0;
+            for (int i = 0; i < rawPalette.Length; i++)
+            {
+                survives[i] = colorCounts[i] >= minCount;
+                if (survives[i]) survivorCount++;
+            }
+
+            // Ensure at least 2 colors survive
+            if (survivorCount < 2)
+            {
+                // Keep the two largest
+                var sorted = new List<int>();
+                for (int i = 0; i < rawPalette.Length; i++) sorted.Add(i);
+                sorted.Sort((a, b) => colorCounts[b].CompareTo(colorCounts[a]));
+                for (int i = 0; i < rawPalette.Length; i++) survives[i] = false;
+                survives[sorted[0]] = true;
+                if (sorted.Count > 1) survives[sorted[1]] = true;
+                survivorCount = Mathf.Min(2, sorted.Count);
+            }
+
+            if (survivorCount < rawPalette.Length)
+            {
+                // Build compact palette from survivors
+                Color[] filteredPalette = new Color[survivorCount];
+                int[] oldToNew = new int[rawPalette.Length];
+                int newIdx = 0;
+                for (int i = 0; i < rawPalette.Length; i++)
+                {
+                    if (survives[i])
+                    {
+                        filteredPalette[newIdx] = rawPalette[i];
+                        oldToNew[i] = newIdx;
+                        newIdx++;
+                    }
+                    else
+                    {
+                        oldToNew[i] = -1; // Will be reassigned
+                    }
+                }
+
+                // Map dead colors → nearest surviving color
+                for (int i = 0; i < rawPalette.Length; i++)
+                {
+                    if (oldToNew[i] < 0)
+                        oldToNew[i] = FindNearestColor(rawPalette[i], filteredPalette);
+                }
+
+                // Remap all assignments
+                for (int i = 0; i < pixels.Length; i++)
+                    rawAssignments[i] = oldToNew[rawAssignments[i]];
+
+                int removed = rawPalette.Length - survivorCount;
+                Debug.Log($"[ColorQuantizer] Filtered {removed} rare colors " +
+                          $"(< {minPercentage:F1}% = {minCount:F0} pixels). " +
+                          $"{survivorCount} colors remain.");
+
+                rawPalette = filteredPalette;
+            }
         }
 
-        Debug.Log($"[ColorQuantizer] Quantized to {palette.Length} colors " +
-                  $"from {pixels.Length} pixels ({indices.Count} non-transparent)");
+        Debug.Log($"[ColorQuantizer] Quantized to {rawPalette.Length} colors " +
+                  $"from {pixels.Length} pixels ({opaqueCount} non-transparent)");
 
         return new QuantizeResult
         {
-            palette = palette,
-            assignments = assignments
+            palette = rawPalette,
+            assignments = rawAssignments
         };
     }
 

@@ -150,12 +150,6 @@ public class FluidSimulationJobs : MonoBehaviour
     void Awake()
     {
         var imageSource = GetComponent<ImageToFluid>();
-        // ImageToFluid imageSource = null;
-        if (imageSource != null)
-        {
-            imageSource.TryParseImage();
-        }
-        
         if (imageSource != null && imageSource.IsReady)
             InitFromImage(imageSource);
         else
@@ -168,15 +162,18 @@ public class FluidSimulationJobs : MonoBehaviour
     {
         float dt = (Time.fixedDeltaTime * timeScale) / subSteps;
 
-        // Wake particles near the flask every frame (with budget)
-        if (flaskActive)
-            WakeNearPoint(flaskPos, wakeRadius);
-
         for (int step = 0; step < subSteps; step++)
             RunSimulationStep(dt);
 
-        // After simulation: check for void-waking (particles with no support below)
-        WakeUnsupported();
+        // All wake checks run AFTER simulation so spatial hash is fresh.
+        if (flaskActive)
+        {
+            WakeNearPoint(flaskPos, wakeRadius);
+            WakeColumnAbove(flaskPos);
+        }
+
+        CascadeWake();
+        DetectFloatingIslands();  // Grid-level check — cheap, catches all floating islands
 
         UploadToGPU();
     }
@@ -355,59 +352,41 @@ public class FluidSimulationJobs : MonoBehaviour
 
     // ─── Wake / Sleep Logic (main thread) ────────────────────────
 
-    private int wakesBudgetRemaining;
+    // Rotating cursors — each method resumes scanning where it left off last frame.
+    // This spreads the O(n) scan cost across multiple frames.
+    private int cascadeScanCursor = 0;
+
+    [Header("Scan Budget")]
+    [Tooltip("Max particles to SCAN (not wake) per frame in cascade/unsupported checks. " +
+             "Lower = less CPU per frame, but slower reaction to changes.")]
+    public int scanBudgetPerFrame = 400;
 
     /// <summary>
-    /// Wakes sleeping particles within radius of a point, up to the per-frame budget.
-    /// Called when flask is active (suction pulls particles, exposing void).
+    /// Moving particles wake sleeping neighbors.
+    /// Scans a chunk of particles each frame using a rotating cursor.
     /// </summary>
-    void WakeNearPoint(float2 point, float radius)
+    void CascadeWake()
     {
-        wakesBudgetRemaining = wakeBudgetPerFrame;
-        float radiusSqr = radius * radius;
+        int wakeBudget = wakeBudgetPerFrame;
+        int scanBudget = scanBudgetPerFrame;
+        float cascadeRadiusSqr = smoothingRadius * smoothingRadius * 4f;
+        float movingThresholdSqr = sleepVelocityThreshold * sleepVelocityThreshold * 4f;
 
-        for (int i = 0; i < ParticleCount && wakesBudgetRemaining > 0; i++)
+        for (int scanned = 0; scanned < scanBudget && wakeBudget > 0; scanned++)
         {
-            if (sleepState[i] == 0) continue; // Already awake
-            if (particles[i].alive < 0.5f) continue; // Dead
+            int i = cascadeScanCursor;
+            cascadeScanCursor = (cascadeScanCursor + 1) % ParticleCount;
 
-            float distSqr = math.lengthsq(particles[i].position - point);
-            if (distSqr < radiusSqr)
-            {
-                sleepState[i] = 0;
-                sleepCounter[i] = 0;
-                wakesBudgetRemaining--;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Wakes sleeping particles that have no support below them
-    /// (no sleeping or awake neighbor within smoothingRadius below).
-    /// This handles cascading collapse when lower particles are absorbed.
-    /// Runs with a budget to prevent mass wake-up.
-    /// </summary>
-    void WakeUnsupported()
-    {
-        // Only check periodically to save CPU (every 5 frames)
-        if (Time.frameCount % 5 != 0) return;
-
-        int budget = wakeBudgetPerFrame;
-        float checkBelow = smoothingRadius * 1.5f;
-
-        for (int i = 0; i < ParticleCount && budget > 0; i++)
-        {
-            if (sleepState[i] == 0) continue; // Already awake
+            // Only awake, alive, moving particles can cascade-wake
+            if (sleepState[i] != 0) continue;
             if (particles[i].alive < 0.5f) continue;
+            if (math.lengthsq(particles[i].velocity) < movingThresholdSqr) continue;
 
-            // Check: is there any alive particle below me within range?
             float2 pos = particles[i].position;
-            bool hasSupport = false;
-
-            // Quick check using the spatial hash
             int2 cell = CellCoord(pos);
-            for (int dx = -1; dx <= 1 && !hasSupport; dx++)
-            for (int dy = -1; dy <= 0 && !hasSupport; dy++) // Only check same row and below
+
+            for (int dx = -1; dx <= 1 && wakeBudget > 0; dx++)
+            for (int dy = -1; dy <= 1 && wakeBudget > 0; dy++)
             {
                 int2 nc = cell + new int2(dx, dy);
                 if (nc.x < 0 || nc.x >= hashGridW || nc.y < 0 || nc.y >= hashGridH) continue;
@@ -416,30 +395,207 @@ public class FluidSimulationJobs : MonoBehaviour
                 int start = cellOffsets[ci];
                 int count = cellCounts[ci];
 
-                for (int s = 0; s < count; s++)
+                for (int s = 0; s < count && wakeBudget > 0; s++)
                 {
                     int j = sortedIndices[start + s];
-                    if (j == i) continue;
-                    if (particles[j].alive < 0.5f) continue;
+                    if (sleepState[j] != 1) continue;
 
-                    float2 diff = particles[j].position - pos;
-                    // Neighbor must be below (or at same level) and within range
-                    if (diff.y <= 0.01f && math.lengthsq(diff) < checkBelow * checkBelow)
+                    if (math.lengthsq(particles[j].position - pos) < cascadeRadiusSqr)
                     {
-                        hasSupport = true;
+                        sleepState[j] = 0;
+                        sleepCounter[j] = 0;
+                        wakeBudget--;
                     }
                 }
             }
+        }
+    }
 
-            // Also count bottom boundary as support
-            if (pos.y < containerMin.y + particleRadius + smoothingRadius)
-                hasSupport = true;
+    /// <summary>
+    /// Wakes sleeping particles near the flask cursor.
+    /// Uses spatial hash for efficient lookup — no full particle scan.
+    /// </summary>
+    void WakeNearPoint(float2 point, float radius)
+    {
+        int wakeBudget = wakeBudgetPerFrame;
+        float radiusSqr = radius * radius;
 
-            if (!hasSupport)
+        // Determine which grid cells overlap the wake radius
+        int2 minCell = CellCoord(point - new float2(radius, radius));
+        int2 maxCell = CellCoord(point + new float2(radius, radius));
+
+        for (int cx = minCell.x; cx <= maxCell.x && wakeBudget > 0; cx++)
+        for (int cy = minCell.y; cy <= maxCell.y && wakeBudget > 0; cy++)
+        {
+            if (cx < 0 || cx >= hashGridW || cy < 0 || cy >= hashGridH) continue;
+
+            int ci = cy * hashGridW + cx;
+            int start = cellOffsets[ci];
+            int count = cellCounts[ci];
+
+            for (int s = 0; s < count && wakeBudget > 0; s++)
             {
+                int i = sortedIndices[start + s];
+                if (sleepState[i] == 0) continue;
+                if (particles[i].alive < 0.5f) continue;
+
+                if (math.lengthsq(particles[i].position - point) < radiusSqr)
+                {
+                    sleepState[i] = 0;
+                    sleepCounter[i] = 0;
+                    wakeBudget--;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Wakes sleeping particles in a vertical column above the suction point.
+    /// This prevents floating islands: when particles are removed from the middle,
+    /// everything above must know there's a void below and start falling.
+    /// Very cheap: only scans grid cells in a narrow vertical strip.
+    /// </summary>
+    void WakeColumnAbove(float2 point)
+    {
+        int wakeBudget = wakeBudgetPerFrame;
+
+        // Column width: slightly wider than smoothing radius so we catch
+        // particles that aren't directly above but would be affected
+        float halfWidth = smoothingRadius * 1.5f;
+
+        int2 colMin = CellCoord(new float2(point.x - halfWidth, point.y));
+        int2 colMax = CellCoord(new float2(point.x + halfWidth, containerMax.y));
+
+        // Scan upward from flask position to top of container
+        for (int cy = colMin.y; cy <= colMax.y && wakeBudget > 0; cy++)
+        for (int cx = colMin.x; cx <= colMax.x && wakeBudget > 0; cx++)
+        {
+            if (cx < 0 || cx >= hashGridW || cy < 0 || cy >= hashGridH) continue;
+
+            int ci = cy * hashGridW + cx;
+            int start = cellOffsets[ci];
+            int count = cellCounts[ci];
+
+            for (int s = 0; s < count && wakeBudget > 0; s++)
+            {
+                int i = sortedIndices[start + s];
+                if (sleepState[i] != 1) continue;
+                if (particles[i].alive < 0.5f) continue;
+
+                // Must be within horizontal range of the column
+                float dx = particles[i].position.x - point.x;
+                if (dx * dx < halfWidth * halfWidth)
+                {
+                    sleepState[i] = 0;
+                    sleepCounter[i] = 0;
+                    wakeBudget--;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Detects floating islands using a grid-level flood fill from the floor.
+    /// 
+    /// Algorithm:
+    ///   1. Mark all bottom-row grid cells that contain alive particles as "grounded"
+    ///   2. Propagate upward: cell (x,y) is grounded if it has alive particles AND
+    ///      any of (x-1,y-1), (x,y-1), (x+1,y-1) is grounded
+    ///   3. Wake all sleeping particles in non-grounded cells
+    ///
+    /// Cost: O(gridW × gridH) for the flood + O(floating particles) for waking.
+    /// Grid is typically ~50×50 = 2500 cells — trivially cheap every frame.
+    /// </summary>
+    void DetectFloatingIslands()
+    {
+        int wakeBudget = wakeBudgetPerFrame;
+
+        // ── Phase 1: Flood fill "grounded" with diagonals (catches true islands) ──
+
+        bool[] grounded = new bool[hashGridTotal];
+
+        // Bottom row: grounded if has alive particles
+        for (int x = 0; x < hashGridW; x++)
+        {
+            grounded[x] = cellCounts[x] > 0; // y=0 row
+        }
+
+        // Propagate upward: cell is grounded if has particles AND
+        // any of (x-1,y-1), (x,y-1), (x+1,y-1) is grounded
+        for (int y = 1; y < hashGridH; y++)
+        {
+            for (int x = 0; x < hashGridW; x++)
+            {
+                int ci = y * hashGridW + x;
+
+                if (cellCounts[ci] == 0)
+                {
+                    grounded[ci] = false;
+                    continue;
+                }
+
+                bool supported = false;
+                int yBelow = y - 1;
+
+                if (x > 0) supported |= grounded[yBelow * hashGridW + (x - 1)];
+                supported |= grounded[yBelow * hashGridW + x];
+                if (x < hashGridW - 1) supported |= grounded[yBelow * hashGridW + (x + 1)];
+
+                grounded[ci] = supported;
+            }
+        }
+
+        // ── Phase 2: Wake particles in true floating islands (not grounded at all) ──
+        for (int ci = 0; ci < hashGridTotal && wakeBudget > 0; ci++)
+        {
+            if (grounded[ci]) continue;
+            if (cellCounts[ci] == 0) continue;
+
+            int start = cellOffsets[ci];
+            int count = cellCounts[ci];
+
+            for (int s = 0; s < count && wakeBudget > 0; s++)
+            {
+                int i = sortedIndices[start + s];
+                if (sleepState[i] != 1) continue;
+
                 sleepState[i] = 0;
                 sleepCounter[i] = 0;
-                budget--;
+                wakeBudget--;
+            }
+        }
+
+        // ── Phase 3: Slope flow — wake grounded sleeping particles ──
+        // that have NO particles directly below them.
+        // This makes fluid "pour off" edges instead of clinging diagonally.
+        // For liquid: diagonal support means you're connected but still should flow down.
+        for (int y = 1; y < hashGridH && wakeBudget > 0; y++)
+        {
+            for (int x = 0; x < hashGridW && wakeBudget > 0; x++)
+            {
+                int ci = y * hashGridW + x;
+
+                if (!grounded[ci]) continue;         // Already handled in Phase 2
+                if (cellCounts[ci] == 0) continue;   // No particles
+
+                // Check: is the cell directly below EMPTY?
+                int belowCi = (y - 1) * hashGridW + x;
+                if (cellCounts[belowCi] > 0) continue; // Has support directly below — stable
+
+                // Cell is grounded via diagonal only — fluid should flow down.
+                // Wake sleeping particles in this cell.
+                int start = cellOffsets[ci];
+                int count = cellCounts[ci];
+
+                for (int s = 0; s < count && wakeBudget > 0; s++)
+                {
+                    int i = sortedIndices[start + s];
+                    if (sleepState[i] != 1) continue;
+
+                    sleepState[i] = 0;
+                    sleepCounter[i] = 0;
+                    wakeBudget--;
+                }
             }
         }
     }
@@ -519,8 +675,6 @@ public class FluidSimulationJobs : MonoBehaviour
             particleMass = particleMass,
             nearPressureStiffness = nearPressureStiffness,
             cohesionStrength = cohesionStrength,
-            interTypeRepulsion = interTypeRepulsion,
-            surfaceTensionStrength = surfaceTensionStrength,
             uniformFluid = uniformFluid,
             spikyGradCoeff = -10f / (math.PI * math.pow(smoothingRadius, 5)),
             viscLaplCoeff = 40f / (math.PI * math.pow(smoothingRadius, 5))
@@ -766,13 +920,12 @@ public class FluidSimulationJobs : MonoBehaviour
         public float2 containerMin;
         public int gridW, gridH;
         public float nearPressureStiffness;
-        public float cohesionStrength, interTypeRepulsion, surfaceTensionStrength;
+        public float cohesionStrength;
         public bool uniformFluid;
         public float spikyGradCoeff, viscLaplCoeff;
 
         public void Execute(int i)
         {
-            // SKIP sleeping and dead particles
             if (sleepState[i] == 1 || particles[i].alive < 0.5f)
             {
                 forces[i] = float2.zero;
@@ -786,8 +939,6 @@ public class FluidSimulationJobs : MonoBehaviour
             var typeI = fluidTypeData[pI.typeIndex];
 
             float2 totalForce = float2.zero;
-            float2 sameTypeCOM = float2.zero;
-            float sameTypeWeight = 0f;
 
             for (int dx = -1; dx <= 1; dx++)
             for (int dy = -1; dy <= 1; dy++)
@@ -814,57 +965,33 @@ public class FluidSimulationJobs : MonoBehaviour
                     float r = math.sqrt(rSqr);
                     float2 dir = diff / r;
 
-                    float densityJ = densities[j];
-                    // For sleeping neighbors, use restDensity as stable estimate
-                    if (densityJ < 0.01f) densityJ = math.max(densities[j], 0.001f);
+                    float densityJ = math.max(densities[j], 0.001f);
 
-                    // Pressure
+                    // Pressure (Spiky gradient)
                     float gm = SpikyGrad(r);
                     float pressAvg = (pressures[i] + pressures[j]) * 0.5f;
-                    float2 pF = dir * (-particleMass * pressAvg * gm / math.max(densityJ, 0.001f));
+                    float2 pF = dir * (-particleMass * pressAvg * gm / densityJ);
 
-                    // Near-pressure
+                    // Near-pressure repulsion
                     float nf = 1f - r / smoothingRadius;
                     float2 nF = dir * (nearPressureStiffness * nf * nf);
 
-                    // Viscosity
+                    // Viscosity — cheap, makes it feel like liquid not sand
                     var typeJ = fluidTypeData[pJ.typeIndex];
                     float mu = (typeI.viscosity + typeJ.viscosity) * 0.5f;
                     float vl = ViscLapl(r);
                     float2 vF = mu * particleMass * (pJ.velocity - pI.velocity)
-                              / math.max(densityJ, 0.001f) * vl;
+                              / densityJ * vl;
 
-                    bool same = uniformFluid || (pI.typeIndex == pJ.typeIndex);
-
+                    // Cohesion — all particles attract (uniformFluid)
                     float2 cF = float2.zero;
-                    if (same)
                     {
                         float t = r / smoothingRadius;
                         cF = -dir * typeI.cohesion * cohesionStrength * t * (1f - t) * (1f - t);
-                        float w = 1f - t;
-                        sameTypeCOM += pJ.position * w;
-                        sameTypeWeight += w;
                     }
 
-                    float2 rF = float2.zero;
-                    if (!same)
-                    {
-                        float rf = 1f - r / smoothingRadius;
-                        rF = dir * interTypeRepulsion * rf * rf;
-                    }
-
-                    totalForce += pF + nF + vF + cF + rF;
+                    totalForce += pF + nF + vF + cF;
                 }
-            }
-
-            if (sameTypeWeight > 0.001f)
-            {
-                float2 com = sameTypeCOM / sameTypeWeight;
-                float2 toCOM = com - pI.position;
-                float d = math.length(toCOM);
-                if (d > 0.001f)
-                    totalForce += (toCOM / d) * surfaceTensionStrength * typeI.cohesion
-                                * math.min(d, smoothingRadius);
             }
 
             forces[i] = totalForce;
