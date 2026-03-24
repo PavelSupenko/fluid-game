@@ -95,6 +95,11 @@ public class FluidDebugOverlay : MonoBehaviour
         GUILayout.BeginArea(new Rect(10, 100, 350, 160));
         GUILayout.Label($"Mode: {modeName}", style);
         GUILayout.Label($"Particles: {particleCount}", style);
+
+        // Show awake count for Jobs sim
+        if (jobsSim != null && jobsSim.enabled)
+            GUILayout.Label($"Awake: {jobsSim.AwakeCount} ({(particleCount > 0 ? jobsSim.AwakeCount * 100 / particleCount : 0)}%)", style);
+
         GUILayout.Label($"FPS: {fps:F0}", style);
         GUILayout.Label($"Avg Density: {avgDensity:F1}", style);
         GUILayout.Label($"Max Density: {maxDensity:F1}", style);
