@@ -74,15 +74,19 @@ public class FluidDebugOverlay : MonoBehaviour
             fontSize = 16,
             fontStyle = FontStyle.Bold
         };
-        style.normal.textColor = Color.black;
+        style.normal.textColor = Color.white;
 
-        GUILayout.BeginArea(new Rect(10, 150, 350, 180));
+        GUILayout.BeginArea(new Rect(10, 10, 400, 220));
         GUILayout.Label($"Mode: {modeName}", style);
         GUILayout.Label($"Particles: {particleCount}", style);
 
-        // Show awake count for Jobs sim
+        // Show awake count and soft body info for Jobs sim
         if (jobsSim != null && jobsSim.enabled)
+        {
             GUILayout.Label($"Awake: {jobsSim.AwakeCount} ({(particleCount > 0 ? jobsSim.AwakeCount * 100 / particleCount : 0)}%)", style);
+            if (jobsSim.HasSoftBodies)
+                GUILayout.Label($"Bodies: {jobsSim.BodyCount}  Springs: {jobsSim.SpringCount}", style);
+        }
 
         GUILayout.Label($"FPS: {fps:F0}", style);
         GUILayout.Label($"Avg Density: {avgDensity:F1}", style);

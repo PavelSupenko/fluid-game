@@ -102,6 +102,11 @@ public class FluidSimulationJobs : MonoBehaviour
     public ComputeBuffer ParticleBuffer => particleBuffer;
     public int AwakeCount { get; private set; }
 
+    // ─── Soft Body Public Accessors ──────────────────────────────
+    public int SpringCount { get; private set; }
+    public int BodyCount { get; private set; }
+    public bool HasSoftBodies { get; private set; }
+
     // ─── Internal Native Data ────────────────────────────────────
     private NativeArray<ParticleData> particles;
     private NativeArray<float2> forces;
@@ -112,6 +117,11 @@ public class FluidSimulationJobs : MonoBehaviour
     // Sleep state (separate arrays to keep ParticleData at 48 bytes for GPU)
     private NativeArray<int> sleepState;     // 0 = awake, 1 = sleeping
     private NativeArray<int> sleepCounter;   // Frames at low velocity
+
+    // Soft body data
+    private NativeArray<int> bodyIndices;           // Per-particle body index (-1 = none)
+    private NativeArray<SpringData> springs;         // All springs
+    private int springCount;
 
     // Spatial hash arrays
     private NativeArray<int> cellCounts;
@@ -138,6 +148,16 @@ public class FluidSimulationJobs : MonoBehaviour
         public float4 color;
     } // 48 bytes
 
+    // Burst-compatible version of SoftBodySpring
+    private struct SpringData
+    {
+        public int particleA;
+        public int particleB;
+        public float restLength;
+        public float breakThreshold;
+        public int alive;           // 1 = active, 0 = broken
+    }
+
     private struct FluidTypeGPU
     {
         public float gravityScale;
@@ -158,6 +178,15 @@ public class FluidSimulationJobs : MonoBehaviour
         else
             SpawnParticles();
 
+        // Process soft body mask (if SoftBodySetup component exists)
+        var softBodySetup = GetComponent<SoftBodySetup>();
+        if (softBodySetup != null && imageSource != null && imageSource.IsReady)
+        {
+            softBodySetup.Process(imageSource);
+            if (softBodySetup.IsReady)
+                HasSoftBodies = true;
+        }
+
         InitNativeData();
     }
 
@@ -172,7 +201,7 @@ public class FluidSimulationJobs : MonoBehaviour
         if (flaskActive)
         {
             WakeNearPoint(flaskPos, wakeRadius);
-            // WakeColumnAbove(flaskPos);
+            WakeColumnAbove(flaskPos);
         }
 
         CascadeWake();
@@ -297,6 +326,45 @@ public class FluidSimulationJobs : MonoBehaviour
             // Start sleeping if configured (image mode) or awake (grid mode)
             sleepState[i] = (startSleeping && p.alive > 0.5f) ? 1 : 0;
             sleepCounter[i] = startSleeping ? sleepFramesRequired : 0;
+        }
+
+        // ── Copy soft body data into native arrays ──
+        var softBodySetup = GetComponent<SoftBodySetup>();
+        if (HasSoftBodies && softBodySetup != null && softBodySetup.IsReady)
+        {
+            bodyIndices = new NativeArray<int>(ParticleCount, Allocator.Persistent);
+            for (int i = 0; i < ParticleCount; i++)
+                bodyIndices[i] = softBodySetup.BodyIndices[i];
+
+            springCount = softBodySetup.SpringCount;
+            SpringCount = springCount;
+            BodyCount = softBodySetup.BodyCount;
+
+            springs = new NativeArray<SpringData>(Mathf.Max(1, springCount), Allocator.Persistent);
+            for (int i = 0; i < springCount; i++)
+            {
+                var s = softBodySetup.Springs[i];
+                springs[i] = new SpringData
+                {
+                    particleA = s.particleA,
+                    particleB = s.particleB,
+                    restLength = s.restLength,
+                    breakThreshold = s.breakThreshold,
+                    alive = s.alive
+                };
+            }
+
+            Debug.Log($"[FluidSimJobs] Soft body data loaded: {BodyCount} bodies, " +
+                      $"{SpringCount} springs");
+        }
+        else
+        {
+            // No soft bodies — allocate minimal arrays to avoid null checks
+            bodyIndices = new NativeArray<int>(ParticleCount, Allocator.Persistent);
+            springs = new NativeArray<SpringData>(1, Allocator.Persistent);
+            springCount = 0;
+            SpringCount = 0;
+            BodyCount = 0;
         }
 
         if (autoRestDensity) CalibrateRestDensity();
@@ -805,6 +873,8 @@ public class FluidSimulationJobs : MonoBehaviour
         if (pressures.IsCreated) pressures.Dispose();
         if (sleepState.IsCreated) sleepState.Dispose();
         if (sleepCounter.IsCreated) sleepCounter.Dispose();
+        if (bodyIndices.IsCreated) bodyIndices.Dispose();
+        if (springs.IsCreated) springs.Dispose();
         if (cellCounts.IsCreated) cellCounts.Dispose();
         if (cellOffsets.IsCreated) cellOffsets.Dispose();
         if (sortedIndices.IsCreated) sortedIndices.Dispose();
