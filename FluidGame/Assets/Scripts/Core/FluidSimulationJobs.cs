@@ -575,36 +575,78 @@ public class FluidSimulationJobs : MonoBehaviour
 
         // ── Phase 3: Slope flow — wake grounded sleeping particles ──
         // that have NO particles directly below them.
-        // This makes fluid "pour off" edges instead of clinging diagonally.
-        // For liquid: diagonal support means you're connected but still should flow down.
         for (int y = 1; y < hashGridH && wakeBudget > 0; y++)
         {
             for (int x = 0; x < hashGridW && wakeBudget > 0; x++)
             {
                 int ci = y * hashGridW + x;
 
-                if (!grounded[ci]) continue;         // Already handled in Phase 2
-                if (cellCounts[ci] == 0) continue;   // No particles
+                if (!grounded[ci]) continue;
+                if (cellCounts[ci] == 0) continue;
 
-                // Check: is the cell directly below EMPTY?
                 int belowCi = (y - 1) * hashGridW + x;
-                if (cellCounts[belowCi] > 0) continue; // Has support directly below — stable
+                if (cellCounts[belowCi] > 0) continue;
 
-                // Cell is grounded via diagonal only — fluid should flow down.
-                // Wake sleeping particles in this cell.
-                int start = cellOffsets[ci];
-                int count = cellCounts[ci];
+                WakeSleepingInCell(ci, ref wakeBudget);
+            }
+        }
 
-                for (int s = 0; s < count && wakeBudget > 0; s++)
+        // ── Phase 4: Horizontal spreading — liquid doesn't form vertical walls ──
+        // If a cell has empty space to its side AND the diagonal-below on that side
+        // is also empty, particles should flow sideways and down.
+        // This turns columns into slopes that spread out like liquid.
+        for (int y = 1; y < hashGridH && wakeBudget > 0; y++)
+        {
+            for (int x = 0; x < hashGridW && wakeBudget > 0; x++)
+            {
+                int ci = y * hashGridW + x;
+
+                if (!grounded[ci]) continue;
+                if (cellCounts[ci] == 0) continue;
+
+                // Check left side: is (x-1, y) empty AND (x-1, y-1) empty?
+                // That means open space to flow into diagonally down-left.
+                bool flowLeft = false;
+                if (x > 0)
                 {
-                    int i = sortedIndices[start + s];
-                    if (sleepState[i] != 1) continue;
+                    bool sideEmpty = cellCounts[y * hashGridW + (x - 1)] == 0;
+                    bool diagEmpty = cellCounts[(y - 1) * hashGridW + (x - 1)] == 0;
+                    flowLeft = sideEmpty && diagEmpty;
+                }
 
-                    sleepState[i] = 0;
-                    sleepCounter[i] = 0;
-                    wakeBudget--;
+                // Check right side: same logic
+                bool flowRight = false;
+                if (x < hashGridW - 1)
+                {
+                    bool sideEmpty = cellCounts[y * hashGridW + (x + 1)] == 0;
+                    bool diagEmpty = cellCounts[(y - 1) * hashGridW + (x + 1)] == 0;
+                    flowRight = sideEmpty && diagEmpty;
+                }
+
+                if (flowLeft || flowRight)
+                {
+                    WakeSleepingInCell(ci, ref wakeBudget);
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Helper: wakes sleeping particles in a specific grid cell, respecting budget.
+    /// </summary>
+    void WakeSleepingInCell(int ci, ref int wakeBudget)
+    {
+        int start = cellOffsets[ci];
+        int count = cellCounts[ci];
+
+        for (int s = 0; s < count && wakeBudget > 0; s++)
+        {
+            int i = sortedIndices[start + s];
+            if (sleepState[i] != 1) continue;
+
+            sleepState[i] = 0;
+            sleepCounter[i] = 0;
+            wakeBudget--;
         }
     }
 
