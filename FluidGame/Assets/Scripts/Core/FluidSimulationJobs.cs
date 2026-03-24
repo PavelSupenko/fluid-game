@@ -356,31 +356,31 @@ public class FluidSimulationJobs : MonoBehaviour
             gravity = new float2(gravity.x, gravity.y), dt = dt
         }.Schedule(ParticleCount, 256).Complete();
 
-        // 3. Solve spring constraints (N iterations)
-        // Single-threaded with Burst — springs read/write predicted positions.
-        // ~12k springs × 4 iterations = ~48k simple operations — trivial for Burst.
+        // 3. Solve constraints: springs + collisions interleaved (N iterations)
         for (int iter = 0; iter < constraintIterations; iter++)
         {
+            // Springs hold shape
             new SpringSolveJob
             {
                 springs = springs, predictedPos = predictedPos,
                 particles = particles, sleepState = sleepState,
                 springCount = springCount, stiffness = springStiffness
             }.Run();
-        }
 
-        // 4. Collision between particles of different bodies (parallel)
-        new CollisionJob
-        {
-            particles = particles, predictedPos = predictedPos,
-            sleepState = sleepState, bodyIndices = bodyIndices,
-            sortedIndices = sortedIndices,
-            cellCounts = cellCounts, cellOffsets = cellOffsets,
-            cellSize = cellSize,
-            containerMin = new float2(containerMin.x, containerMin.y),
-            gridW = hashGridW, gridH = hashGridH,
-            collisionRadius = collisionRadius, collisionStiffness = collisionStiffness
-        }.Schedule(ParticleCount, 128).Complete();
+            // Collision between ALL particles — prevents overlap.
+            // Works for inter-body AND intra-body (broken-off chunks).
+            new CollisionJob
+            {
+                particles = particles, predictedPos = predictedPos,
+                sleepState = sleepState,
+                sortedIndices = sortedIndices,
+                cellCounts = cellCounts, cellOffsets = cellOffsets,
+                cellSize = cellSize,
+                containerMin = new float2(containerMin.x, containerMin.y),
+                gridW = hashGridW, gridH = hashGridH,
+                collisionRadius = collisionRadius, collisionStiffness = collisionStiffness
+            }.Schedule(ParticleCount, 128).Complete();
+        }
 
         // 5. Finalize: update velocity from position change, apply damping,
         //    flask suction, boundaries
@@ -793,7 +793,7 @@ public class FluidSimulationJobs : MonoBehaviour
         }
     }
 
-    // ─── PBD Step 3: Collision between different bodies ──────────
+    // ─── PBD Step 3: Universal particle collision ─────────────────
 
     [BurstCompile]
     struct CollisionJob : IJobParallelFor
@@ -802,7 +802,6 @@ public class FluidSimulationJobs : MonoBehaviour
         [NativeDisableParallelForRestriction]
         public NativeArray<float2> predictedPos;
         [ReadOnly] public NativeArray<int> sleepState;
-        [ReadOnly] public NativeArray<int> bodyIndices;
         [ReadOnly] public NativeArray<int> sortedIndices;
         [ReadOnly] public NativeArray<int> cellCounts, cellOffsets;
         public float cellSize; public float2 containerMin;
@@ -814,7 +813,6 @@ public class FluidSimulationJobs : MonoBehaviour
             if (particles[i].alive < 0.5f || sleepState[i] == 1) return;
 
             float2 posI = predictedPos[i];
-            int bodyI = bodyIndices[i];
             float collRadSqr = collisionRadius * collisionRadius;
 
             int2 cellI = math.clamp(
@@ -839,9 +837,9 @@ public class FluidSimulationJobs : MonoBehaviour
                     if (j == i) continue;
                     if (particles[j].alive < 0.5f) continue;
 
-                    // Only collide between different bodies (same body uses springs)
-                    if (bodyIndices[j] == bodyI) continue;
-
+                    // Collide ALL particles — no body filter.
+                    // Springs pull same-body particles together,
+                    // collisions prevent overlap. They converge together.
                     float2 diff = posI - predictedPos[j];
                     float distSqr = math.lengthsq(diff);
 
