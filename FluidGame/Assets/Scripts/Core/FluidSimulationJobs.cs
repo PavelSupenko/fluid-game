@@ -150,6 +150,9 @@ public class FluidSimulationJobs : MonoBehaviour
     void Awake()
     {
         var imageSource = GetComponent<ImageToFluid>();
+        if (imageSource != null) 
+            imageSource.TryParseImage();
+        
         if (imageSource != null && imageSource.IsReady)
             InitFromImage(imageSource);
         else

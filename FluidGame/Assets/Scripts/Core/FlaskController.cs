@@ -27,7 +27,6 @@ public class FlaskController : MonoBehaviour
     public Vector2 FlaskWorldPos { get; private set; }
 
     // ─── Internals ───────────────────────────────────────────────
-    private FluidSimulationGPU gpuSim;
     private FluidSimulationJobs jobsSim;
     private Camera mainCam;
     private FluidTypeDefinition[] fluidTypes;
@@ -39,15 +38,9 @@ public class FlaskController : MonoBehaviour
     {
         mainCam = Camera.main;
 
-        gpuSim = FindObjectOfType<FluidSimulationGPU>();
         jobsSim = FindObjectOfType<FluidSimulationJobs>();
 
-        if (gpuSim != null && gpuSim.enabled)
-        {
-            fluidTypes = gpuSim.fluidTypes;
-            particleCount = gpuSim.ParticleCount;
-        }
-        else if (jobsSim != null && jobsSim.enabled)
+        if (jobsSim != null && jobsSim.enabled)
         {
             fluidTypes = jobsSim.fluidTypes;
             particleCount = jobsSim.ParticleCount;
@@ -68,8 +61,6 @@ public class FlaskController : MonoBehaviour
         IsSucking = Input.GetMouseButton(0);
 
         // Pass suction data to whichever sim is active
-        if (gpuSim != null && gpuSim.enabled)
-            PassToGPU();
         if (jobsSim != null && jobsSim.enabled)
             PassToJobs();
 
@@ -89,19 +80,6 @@ public class FlaskController : MonoBehaviour
         FlaskWorldPos = new Vector2(worldPos.x, worldPos.y);
     }
 
-    void PassToGPU()
-    {
-        var cs = gpuSim.computeShader;
-        if (cs == null) return;
-
-        cs.SetFloat("flaskActive", IsSucking ? 1f : 0f);
-        cs.SetVector("flaskPos", new Vector4(FlaskWorldPos.x, FlaskWorldPos.y, 0, 0));
-        cs.SetFloat("flaskTargetType", (float)targetTypeIndex);
-        cs.SetFloat("flaskRadius", suctionRadius);
-        cs.SetFloat("flaskAbsorbRadius", absorbRadius);
-        cs.SetFloat("flaskStrength", suctionStrength);
-    }
-
     void PassToJobs()
     {
         jobsSim.flaskActive = IsSucking;
@@ -117,9 +95,7 @@ public class FlaskController : MonoBehaviour
         FluidParticle[] p = null;
         int count = 0;
 
-        if (gpuSim != null && gpuSim.enabled && gpuSim.Particles != null)
-        { p = gpuSim.Particles; count = gpuSim.ParticleCount; }
-        else if (jobsSim != null && jobsSim.enabled && jobsSim.Particles != null)
+        if (jobsSim != null && jobsSim.enabled && jobsSim.Particles != null)
         { p = jobsSim.Particles; count = jobsSim.ParticleCount; }
 
         if (p == null) return;

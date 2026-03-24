@@ -7,7 +7,7 @@ using UnityEngine;
 public class ContainerBoundsRenderer : MonoBehaviour
 {
     [Tooltip("Color of the container outline")]
-    public Color lineColor = Color.yellow;
+    public Color lineColor = Color.green;
 
     [Tooltip("Slight inward offset so the line doesn't clip at screen edge")]
     public float inset = 0.02f;
@@ -29,23 +29,6 @@ public class ContainerBoundsRenderer : MonoBehaviour
             containerMax = jobs.containerMax;
             initialized = true;
             return;
-        }
-
-        var gpu = GetComponent<FluidSimulationGPU>();
-        if (gpu != null)
-        {
-            containerMin = gpu.containerMin;
-            containerMax = gpu.containerMax;
-            initialized = true;
-            return;
-        }
-
-        var cpu = GetComponent<FluidSimulation>();
-        if (cpu != null)
-        {
-            containerMin = cpu.containerMin;
-            containerMax = cpu.containerMax;
-            initialized = true;
         }
     }
 

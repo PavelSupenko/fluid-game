@@ -5,7 +5,6 @@ using UnityEngine;
 /// Uses Graphics.DrawMeshInstanced with a MaterialPropertyBlock
 /// to pass per-instance colors efficiently.
 /// </summary>
-[RequireComponent(typeof(FluidSimulation))]
 public class FluidRenderer : MonoBehaviour
 {
     [Header("Rendering")]
@@ -17,7 +16,7 @@ public class FluidRenderer : MonoBehaviour
 
     // ─── Internals ───────────────────────────────────────────────
 
-    private FluidSimulation sim;
+    private FluidSimulationJobs sim;
     private Mesh quadMesh;
 
     // Pre-allocated arrays to avoid GC allocations every frame
@@ -33,7 +32,7 @@ public class FluidRenderer : MonoBehaviour
 
     void Start()
     {
-        sim = GetComponent<FluidSimulation>();
+        sim = GetComponent<FluidSimulationJobs>();
         quadMesh = CreateQuadMesh();
 
         batchMatrices = new Matrix4x4[BATCH_SIZE];

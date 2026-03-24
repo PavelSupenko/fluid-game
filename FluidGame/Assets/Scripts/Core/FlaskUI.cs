@@ -35,17 +35,9 @@ public class FlaskUI : MonoBehaviour
         }
 
         // Find fluid types from whichever simulation is active
-        var gpu = FindObjectOfType<FluidSimulationGPU>();
-        if (gpu != null && gpu.enabled)
-        {
-            fluidTypes = gpu.fluidTypes;
-        }
-        else
-        {
-            var jobs = FindObjectOfType<FluidSimulationJobs>();
-            if (jobs != null && jobs.enabled)
-                fluidTypes = jobs.fluidTypes;
-        }
+        var jobs = FindObjectOfType<FluidSimulationJobs>();
+        if (jobs != null && jobs.enabled)
+            fluidTypes = jobs.fluidTypes;
 
         if (fluidTypes == null || fluidTypes.Length == 0)
         {

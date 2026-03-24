@@ -18,15 +18,11 @@ public class FluidDebugOverlay : MonoBehaviour
     private const float STATS_INTERVAL = 0.25f;
 
     // Cached references
-    private FluidSimulationGPU gpuSim;
     private FluidSimulationJobs jobsSim;
-    private FluidSimulation cpuSim;
 
     void Start()
     {
-        gpuSim = FindObjectOfType<FluidSimulationGPU>();
         jobsSim = FindObjectOfType<FluidSimulationJobs>();
-        cpuSim = FindObjectOfType<FluidSimulation>();
     }
 
     void Update()
@@ -50,18 +46,6 @@ public class FluidDebugOverlay : MonoBehaviour
             particles = jobsSim.Particles;
             particleCount = jobsSim.ParticleCount;
             modeName = "Jobs+Burst";
-        }
-        else if (gpuSim != null && gpuSim.enabled && gpuSim.Particles != null)
-        {
-            particles = gpuSim.Particles;
-            particleCount = gpuSim.ParticleCount;
-            modeName = "GPU Compute";
-        }
-        else if (cpuSim != null && cpuSim.enabled && cpuSim.Particles != null)
-        {
-            particles = cpuSim.Particles;
-            particleCount = cpuSim.ParticleCount;
-            modeName = "CPU (legacy)";
         }
     }
 

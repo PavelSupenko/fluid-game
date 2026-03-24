@@ -38,22 +38,7 @@ public static class FluidSimBridge
                 IsValid = true
             };
         }
-
-        var gpu = Object.FindObjectOfType<FluidSimulationGPU>();
-        if (gpu != null && gpu.enabled)
-        {
-            return new SimRef
-            {
-                Particles = gpu.Particles,
-                ParticleCount = gpu.ParticleCount,
-                ParticleBuffer = gpu.ParticleBuffer,
-                FluidTypes = gpu.fluidTypes,
-                ContainerMin = gpu.containerMin,
-                ContainerMax = gpu.containerMax,
-                IsValid = true
-            };
-        }
-
+        
         return new SimRef { IsValid = false };
     }
 }

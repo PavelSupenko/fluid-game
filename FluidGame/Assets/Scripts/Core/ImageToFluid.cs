@@ -157,15 +157,9 @@ public class ImageToFluid : MonoBehaviour
         // Read container bounds from whichever simulation is present
         Vector2 containerMin, containerMax;
 
-        var gpuSim = GetComponent<FluidSimulationGPU>();
         var jobsSim = GetComponent<FluidSimulationJobs>();
 
-        if (gpuSim != null)
-        {
-            containerMin = gpuSim.containerMin;
-            containerMax = gpuSim.containerMax;
-        }
-        else if (jobsSim != null)
+        if (jobsSim != null)
         {
             containerMin = jobsSim.containerMin;
             containerMax = jobsSim.containerMax;
@@ -179,19 +173,18 @@ public class ImageToFluid : MonoBehaviour
         float containerW = containerMax.x - containerMin.x;
         float containerH = containerMax.y - containerMin.y;
 
-        // Fit the image in the container with small margin on sides
-        float margin = 0.2f;
-        float availW = containerW - margin * 2f;
-        float availH = containerH - margin;  // No top margin needed, bottom flush
-
-        // Compute spacing so the image fits within available space
-        float spacingX = availW / sampleW;
-        float spacingY = availH / sampleH;
+        // Fit image edge-to-edge: flush to left, right, and bottom of container.
+        // Spacing is determined by whichever axis is tighter (width or height).
+        // Typically width is the limiting factor for landscape images.
+        float spacingX = containerW / sampleW;
+        float spacingY = containerH / sampleH;
         ComputedSpacing = Mathf.Min(spacingX, spacingY);
 
-        // Center horizontally, align BOTTOM of image to container bottom
+        // Compute actual image dimensions with chosen spacing
         float totalW = sampleW * ComputedSpacing;
         float totalH = sampleH * ComputedSpacing;
+
+        // Center horizontally within container, flush to bottom
         float originX = containerMin.x + (containerW - totalW) * 0.5f + ComputedSpacing * 0.5f;
         float originY = containerMin.y + ComputedSpacing * 0.5f; // Bottom-aligned
 

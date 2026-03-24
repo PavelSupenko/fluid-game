@@ -98,16 +98,9 @@ public class MetaballFluidRenderer : MonoBehaviour
     {
         cam = GetComponent<Camera>();
         // Find whichever simulation is active
-        var gpu = FindObjectOfType<FluidSimulationGPU>();
         var jobs = FindObjectOfType<FluidSimulationJobs>();
 
-        if (gpu != null && gpu.enabled)
-        {
-            simParticleBuffer = gpu.ParticleBuffer;
-            simParticleCount = gpu.ParticleCount;
-            simFluidTypes = gpu.fluidTypes;
-        }
-        else if (jobs != null && jobs.enabled)
+        if (jobs != null && jobs.enabled)
         {
             simParticleBuffer = jobs.ParticleBuffer;
             simParticleCount = jobs.ParticleCount;
