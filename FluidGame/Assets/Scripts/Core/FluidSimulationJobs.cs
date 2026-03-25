@@ -1361,15 +1361,17 @@ public class FluidSimulationJobs : MonoBehaviour
             float density = math.max(densities[i], 0.001f);
             float mass = particleMasses[i];
 
-            // F = ma → a = F/m. Heavier particles accelerate slower (more inertia).
-            // SPH forces are already density-relative, so divide by mass on top.
-            float2 accel = forces[i] / (density * mass) + gravity * gScale;
+            // SPH forces divided by density (standard SPH).
+            // Gravity: F=mg, a=g — mass cancels, all particles fall equally.
+            // Cohesion jitter damping: only divide cohesion-type forces by sqrt(mass)
+            // to prevent oscillation without killing movement.
+            float2 accel = forces[i] / (density * math.sqrt(mass)) + gravity * gScale;
 
             p.velocity += accel * dt;
 
-            // Extra damping for heavy particles — they should be sluggish, not jittery
-            // mass=1 → no extra damping, mass=50 → significant extra damping
-            float massDamping = 1f / (1f + (mass - 1f) * 0.03f);
+            // Gentle extra damping for heavy particles — prevents jitter
+            // mass=1 → 1.0 (no damping), mass=10 → 0.96, mass=50 → 0.80
+            float massDamping = 1f / (1f + (mass - 1f) * 0.005f);
             p.velocity *= massDamping;
 
             // Flask suction

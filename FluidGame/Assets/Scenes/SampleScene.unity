@@ -270,9 +270,14 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   showMetaballs: 1
-  splatScale: 0.1
-  blobSharpness: 2
-  resolutionScale: 0.75
+  splatScale: 0.09
+  blobSharpness: 8
+  resolutionScale: 0.85
+  enableBridges: 1
+  bridgeRadiusMultiplier: 2.5
+  bridgeAlpha: 0.85
+  bridgeEdgeSoftness: 0.4
+  bridgeRebuildInterval: 7
   solidColors: 1
   showDebugRT: 0
 --- !u!1 &619394800
@@ -420,7 +425,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 884c2fdaccf753948b898084e94c2388, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  showParticles: 1
+  showParticles: 0
   particleMaterial: {fileID: 2100000, guid: 7680ba8a5f9b9bf45bd4c826cfb6fa76, type: 2}
   renderScale: 0.078
 --- !u!114 &1807844257
@@ -511,7 +516,7 @@ MonoBehaviour:
   mergeInterval: 20
   mergeVelocityThreshold: 1.12
   cohesionMassExponent: 1.5
-  gravity: {x: 0, y: -4}
+  gravity: {x: 0, y: -4.5}
   boundaryDamping: 0.3
   velocityDamping: 0.98
   timeScale: 1
