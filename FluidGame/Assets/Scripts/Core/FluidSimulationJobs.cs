@@ -51,12 +51,12 @@ public class FluidSimulationJobs : MonoBehaviour
     [Header("Particle Collision")]
     [Tooltip("Minimum distance between particles as a factor of particleSpacing. " +
              "0.85 = particles can't get closer than 85% of their initial spacing.")]
-    [Range(0.3f, 1.2f)]
+    [Range(0.3f, 5f)]
     public float collisionRadiusFactor = 0.85f;
 
     [Tooltip("How strongly overlapping particles push apart per sub-step. " +
              "1.0 = full correction in one step (rigid). 0.5 = half correction (softer).")]
-    [Range(0.1f, 1.0f)]
+    [Range(0.01f, 1.0f)]
     public float collisionPushStrength = 0.8f;
 
     // ─── Particle Merging (LOD) ──────────────────────────────────
@@ -65,7 +65,7 @@ public class FluidSimulationJobs : MonoBehaviour
     public bool enableMerging = true;
 
     [Tooltip("Max original particles that can merge into one large droplet")]
-    [Range(2, 50)]
+    [Range(2, 1_000)]
     public int maxMergeSize = 4;
 
     [Tooltip("How often to run the merge pass (every N frames). Lower = more responsive.")]

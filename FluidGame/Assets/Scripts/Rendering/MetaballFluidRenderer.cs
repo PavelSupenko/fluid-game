@@ -22,6 +22,8 @@ public class MetaballFluidRenderer : MonoBehaviour
     [Tooltip("Size of each particle circle")]
     public float splatScale = 0.09f;
 
+    public float splatScaleMultiplierFromSpacing = 1.8f;
+
     [Tooltip("Edge softness of each circle. Lower = sharper, higher = softer.")]
     [Range(1f, 8f)]
     public float blobSharpness = 2f;
@@ -123,7 +125,7 @@ public class MetaballFluidRenderer : MonoBehaviour
             simParticleSpacing = sim.particleSpacing;
 
             if (simParticleSpacing > 0.001f)
-                splatScale = simParticleSpacing * 1.8f;
+                splatScale = simParticleSpacing * splatScaleMultiplierFromSpacing;
         }
         else
         {
