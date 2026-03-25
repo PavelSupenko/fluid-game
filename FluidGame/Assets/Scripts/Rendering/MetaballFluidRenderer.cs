@@ -1,244 +1,390 @@
 using UnityEngine;
+using System.Collections.Generic;
 
 /// <summary>
-/// Renders fluid particles as a smooth metaball surface.
-/// 
-/// SETUP: Attach this component to the Main Camera.
-///        Also add the MetaballCompositeFeature to your URP Renderer Asset.
+/// Renders fluid particles as colored blobs with viscous bridge connections.
 ///
-/// This component handles the SPLAT pass: rendering soft gaussian blobs
-/// to an offscreen RenderTexture using direct Graphics calls.
-/// The composite pass (thresholding + overlay) is done by MetaballCompositeFeature.
+/// Bridges: tapered connections drawn between nearby same-type particles,
+/// creating the look of thick oil paint or viscous fluid that "sticks together".
+/// Built on CPU using a spatial hash, rendered as instanced trapezoids.
 ///
-/// The splat is rendered in LateUpdate using Graphics.DrawMeshInstancedIndirect
-/// directly — NOT through the SRP command buffer — which avoids URP compatibility issues.
+/// SETUP: Put on Main Camera. Add MetaballCompositeFeature to URP Renderer Asset.
 /// </summary>
 [RequireComponent(typeof(Camera))]
 public class MetaballFluidRenderer : MonoBehaviour
 {
-    // ─── Singleton for RendererFeature access ────────────────────
     public static MetaballFluidRenderer Instance { get; private set; }
 
     [Header("Enable / Disable")]
     public bool showMetaballs = true;
 
-    [Header("Splat Settings")]
-    [Tooltip("Size of each particle's gaussian blob. Larger = more merging.")]
-    public float splatScale = 0.35f;
+    [Header("Particle Rendering")]
+    [Tooltip("Size of each particle circle")]
+    public float splatScale = 0.09f;
 
-    [Tooltip("Falloff sharpness. Lower = softer blobs, more merging.")]
+    [Tooltip("Edge softness of each circle. Lower = sharper, higher = softer.")]
     [Range(1f, 8f)]
-    public float blobSharpness = 3f;
+    public float blobSharpness = 2f;
 
     [Tooltip("Render target resolution multiplier")]
     [Range(0.25f, 1f)]
     public float resolutionScale = 0.75f;
 
-    [Header("Composite Settings")]
-    [Tooltip("When ON, each pixel snaps to the nearest fluid type color. " +
-             "When OFF, colors blend smoothly at boundaries between types.")]
+    [Header("Bridge Connections")]
+    [Tooltip("Enable viscous bridge connections between same-type particles")]
+    public bool enableBridges = true;
+
+    [Tooltip("How far a particle can 'see' neighbors for bridging, as multiplier of splatScale. " +
+             "1.0 = only touching particles. 2.0 = bridge across one gap. 5.0 = long stretchy bridges.")]
+    [Range(1f, 10f)]
+    public float bridgeRadiusMultiplier = 2.5f;
+
+    [Tooltip("Opacity of bridge connections. 1.0 = fully opaque, 0.5 = semi-transparent.")]
+    [Range(0.1f, 1f)]
+    public float bridgeAlpha = 0.9f;
+
+    [Tooltip("Edge softness of bridges. Lower = hard edges, higher = feathered.")]
+    [Range(0.1f, 2f)]
+    public float bridgeEdgeSoftness = 0.5f;
+
+    [Tooltip("Width of bridges relative to particle size. Higher = thicker connections, fewer gaps.")]
+    [Range(1f, 5f)]
+    public float bridgeWidthMultiplier = 2.5f;
+
+    [Tooltip("How often to rebuild bridges (every N frames). 1 = every frame.")]
+    [Range(1, 10)]
+    public int bridgeRebuildInterval = 2;
+
+    [Header("Snap to Palette")]
     public bool solidColors = true;
 
-    [Tooltip("Accumulated weight threshold for solid fluid. Lower = thicker.")]
-    [Range(0.01f, 2f)]
-    public float threshold = 0.35f;
-
-    [Tooltip("Smoothness of the fluid edge. Lower = sharper, more paint-like.")]
-    [Range(0.01f, 0.5f)]
-    public float edgeSoftness = 0.05f;
-
-    [Tooltip("Edge shading: negative = darken edges (paint depth), positive = bright rim (neon).")]
-    [Range(-1f, 1f)]
-    public float edgeHighlight = -0.15f;
-
-    [Tooltip("Color vibrancy boost.")]
-    [Range(0.5f, 2f)]
-    public float colorSaturation = 1.1f;
+    [Header("Debug")]
+    public bool showDebugRT = false;
 
     // ─── Public for RendererFeature ──────────────────────────────
 
-    /// <summary>
-    /// The RenderTexture containing accumulated splat data.
-    /// Read by MetaballCompositeFeature for the composite pass.
-    /// </summary>
-    public RenderTexture SplatRT { get; private set; }
-
-    /// <summary>
-    /// Composite material with current settings applied.
-    /// Read by MetaballCompositeFeature.
-    /// </summary>
+    public RenderTexture FluidRT { get; private set; }
     public Material CompositeMaterial { get; private set; }
 
     // ─── Internals ───────────────────────────────────────────────
 
+    private FluidSimulationJobs sim;
     private ComputeBuffer simParticleBuffer;
     private int simParticleCount;
     private FluidTypeDefinition[] simFluidTypes;
+    private float simParticleSpacing;
     private Camera cam;
     private Material splatMaterial;
+    private Material bridgeMaterial;
     private Mesh quadMesh;
+    private Mesh bridgeQuadMesh;
     private ComputeBuffer argsBuffer;
+    private ComputeBuffer bridgeBuffer;
+    private ComputeBuffer bridgeArgsBuffer;
     private uint[] args = new uint[5];
+    private uint[] bridgeArgs = new uint[5];
     private Bounds renderBounds;
     private bool argsReady;
 
-    // ─── Lifecycle ───────────────────────────────────────────────
-
-    void OnEnable()
+    // Bridge building
+    private struct BridgeData
     {
-        Instance = this;
-    }
+        public Vector2 posA;
+        public Vector2 posB;
+        public float radiusA;
+        public float radiusB;
+        public Color color;
+    } // 40 bytes
 
-    void OnDisable()
-    {
-        if (Instance == this) Instance = null;
-    }
+    private List<BridgeData> bridgeList = new List<BridgeData>(4096);
+    private int currentBridgeCount;
+    private const int MAX_BRIDGES = 50000;
+
+    // Simple spatial hash for bridge building
+    private Dictionary<int, List<int>> bridgeGrid = new Dictionary<int, List<int>>(512);
+
+    void OnEnable() { Instance = this; }
+    void OnDisable() { if (Instance == this) Instance = null; }
 
     void Start()
     {
         cam = GetComponent<Camera>();
-        // Find whichever simulation is active
-        var jobs = FindObjectOfType<FluidSimulationJobs>();
 
-        if (jobs != null && jobs.enabled)
+        var circleRenderer = FindObjectOfType<FluidRendererGPU>();
+        if (circleRenderer != null && circleRenderer.enabled)
+            circleRenderer.showParticles = false;
+
+        sim = FindObjectOfType<FluidSimulationJobs>();
+        if (sim != null && sim.enabled)
         {
-            simParticleBuffer = jobs.ParticleBuffer;
-            simParticleCount = jobs.ParticleCount;
-            simFluidTypes = jobs.fluidTypes;
+            simParticleBuffer = sim.ParticleBuffer;
+            simParticleCount = sim.ParticleCount;
+            simFluidTypes = sim.fluidTypes;
+            simParticleSpacing = sim.particleSpacing;
+
+            if (simParticleSpacing > 0.001f)
+                splatScale = simParticleSpacing * 1.8f;
         }
         else
         {
-            Debug.LogError("[MetaballRenderer] No active simulation found!");
+            Debug.LogError("[MetaballRenderer] No FluidSimulationJobs found!");
             enabled = false;
             return;
         }
 
-        // Create materials from shaders
+        // Splat shader
         var splatShader = Shader.Find("FluidSim/MetaballSplat");
-        var compositeShader = Shader.Find("FluidSim/MetaballComposite");
-
-        if (splatShader == null || compositeShader == null)
-        {
-            Debug.LogError("[MetaballRenderer] Shaders not found! " +
-                           "Ensure MetaballSplat.shader and MetaballComposite.shader are in the project.");
-            enabled = false;
-            return;
-        }
-
+        if (splatShader == null) { Debug.LogError("[MetaballRenderer] MetaballSplat shader not found!"); enabled = false; return; }
         splatMaterial = new Material(splatShader) { hideFlags = HideFlags.HideAndDontSave };
-        CompositeMaterial = new Material(compositeShader) { hideFlags = HideFlags.HideAndDontSave };
+
+        // Bridge shader
+        var bridgeShader = Shader.Find("FluidSim/FluidBridge");
+        if (bridgeShader == null) { Debug.LogError("[MetaballRenderer] FluidBridge shader not found!"); enabled = false; return; }
+        bridgeMaterial = new Material(bridgeShader) { hideFlags = HideFlags.HideAndDontSave };
+
+        // Composite shader
+        var compShader = Shader.Find("FluidSim/MetaballComposite");
+        if (compShader == null) { Debug.LogError("[MetaballRenderer] MetaballComposite shader not found!"); enabled = false; return; }
+        CompositeMaterial = new Material(compShader) { hideFlags = HideFlags.HideAndDontSave };
 
         quadMesh = CreateQuadMesh();
+        bridgeQuadMesh = CreateBridgeQuadMesh();
         renderBounds = new Bounds(Vector3.zero, Vector3.one * 200f);
         argsBuffer = new ComputeBuffer(1, 5 * sizeof(uint), ComputeBufferType.IndirectArguments);
+        bridgeArgsBuffer = new ComputeBuffer(1, 5 * sizeof(uint), ComputeBufferType.IndirectArguments);
 
-        Debug.Log("[MetaballRenderer] Initialized. Make sure MetaballCompositeFeature " +
-                  "is added to your URP Renderer Asset.");
+        // Pre-allocate bridge buffer
+        bridgeBuffer = new ComputeBuffer(MAX_BRIDGES, 40); // 40 bytes per BridgeData
+
+        Debug.Log($"[MetaballRenderer] Initialized with bridges. splatScale={splatScale:F3}");
     }
 
     void LateUpdate()
     {
-        if (!showMetaballs || simParticleBuffer == null)
-            return;
+        if (!showMetaballs || simParticleBuffer == null) return;
 
         EnsureArgsBuffer();
-        EnsureSplatRT();
-        RenderSplat();
+        EnsureFluidRT();
+
+        // Build bridges periodically
+        if (enableBridges && Time.frameCount % bridgeRebuildInterval == 0)
+            BuildBridges();
+
+        RenderFluid();
         UpdateCompositeMaterial();
+    }
+
+    void OnGUI()
+    {
+        if (showDebugRT && FluidRT != null)
+        {
+            float size = 300f;
+            float aspect = (float)FluidRT.width / FluidRT.height;
+            Rect rect = new Rect(10, Screen.height - size / aspect - 10, size, size / aspect);
+            GUI.DrawTexture(rect, FluidRT);
+            GUI.Label(new Rect(10, rect.y - 20, 400, 20),
+                $"Fluid RT: {FluidRT.width}x{FluidRT.height} | Bridges: {currentBridgeCount}");
+        }
     }
 
     void OnDestroy()
     {
         argsBuffer?.Release();
-        if (SplatRT != null)
-        {
-            SplatRT.Release();
-            DestroyImmediate(SplatRT);
-        }
+        bridgeArgsBuffer?.Release();
+        bridgeBuffer?.Release();
+        if (FluidRT != null) { FluidRT.Release(); DestroyImmediate(FluidRT); }
         if (splatMaterial != null) DestroyImmediate(splatMaterial);
+        if (bridgeMaterial != null) DestroyImmediate(bridgeMaterial);
         if (CompositeMaterial != null) DestroyImmediate(CompositeMaterial);
     }
 
-    // ─── Splat Rendering ─────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════
+    //  BRIDGE BUILDING (CPU, main thread)
+    // ═════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Renders all particles as soft gaussian blobs to SplatRT using direct Graphics calls.
-    /// Additive blending accumulates (color * weight) in RGB and (weight) in alpha.
-    /// </summary>
-    void RenderSplat()
+    void BuildBridges()
     {
-        // Compute View-Projection matrix. renderIntoTexture=true handles Y-flip.
+        var particles = sim.Particles;
+        if (particles == null) return;
+
+        bridgeList.Clear();
+
+        float bridgeRadius = splatScale * bridgeRadiusMultiplier;
+        float cellSize = bridgeRadius;
+
+        // Build spatial hash
+        bridgeGrid.Clear();
+        int gridW = 1000;
+
+        for (int i = 0; i < simParticleCount; i++)
+        {
+            if (particles[i].alive < 0.5f) continue;
+
+            int cx = Mathf.FloorToInt(particles[i].position.x / cellSize);
+            int cy = Mathf.FloorToInt(particles[i].position.y / cellSize);
+            int key = cy * gridW + cx;
+
+            if (!bridgeGrid.ContainsKey(key))
+                bridgeGrid[key] = new List<int>(8);
+            bridgeGrid[key].Add(i);
+        }
+
+        // Find pairs
+        for (int i = 0; i < simParticleCount; i++)
+        {
+            if (particles[i].alive < 0.5f) continue;
+            if (bridgeList.Count >= MAX_BRIDGES) break;
+
+            int typeI = particles[i].typeIndex;
+            Vector2 posI = particles[i].position;
+
+            // Radius scales with mass (stored in density field by UploadToGPU)
+            float massI = Mathf.Max(particles[i].density, 1f);
+            float radiusI = splatScale * Mathf.Pow(massI, 0.35f) * 0.5f;
+
+            // Search radius scales with THIS particle's size —
+            // bigger particles reach further to find neighbors
+            float searchRadius = bridgeRadius * Mathf.Pow(massI, 0.35f);
+            float searchRadiusSqr = searchRadius * searchRadius;
+
+            int cx = Mathf.FloorToInt(posI.x / cellSize);
+            int cy = Mathf.FloorToInt(posI.y / cellSize);
+
+            // Search wider grid area for large particles
+            int searchCells = Mathf.CeilToInt(searchRadius / cellSize);
+            for (int dx = -searchCells; dx <= searchCells; dx++)
+            for (int dy = -searchCells; dy <= searchCells; dy++)
+            {
+                int key = (cy + dy) * gridW + (cx + dx);
+                if (!bridgeGrid.TryGetValue(key, out var cell)) continue;
+
+                for (int n = 0; n < cell.Count; n++)
+                {
+                    int j = cell[n];
+                    if (j <= i) continue;
+                    if (particles[j].typeIndex != typeI) continue;
+                    if (particles[j].alive < 0.5f) continue;
+
+                    Vector2 posJ = particles[j].position;
+                    float distSqr = (posI - posJ).sqrMagnitude;
+
+                    if (distSqr < searchRadiusSqr && distSqr > 0.0001f)
+                    {
+                        float massJ = Mathf.Max(particles[j].density, 1f);
+                        float radiusJ = splatScale * Mathf.Pow(massJ, 0.35f) * 0.5f;
+
+                        bridgeList.Add(new BridgeData
+                        {
+                            posA = posI,
+                            posB = posJ,
+                            radiusA = radiusI * bridgeWidthMultiplier,
+                            radiusB = radiusJ * bridgeWidthMultiplier,
+                            color = particles[i].color
+                        });
+
+                        if (bridgeList.Count >= MAX_BRIDGES) break;
+                    }
+                }
+                if (bridgeList.Count >= MAX_BRIDGES) break;
+            }
+        }
+
+        currentBridgeCount = Mathf.Min(bridgeList.Count, MAX_BRIDGES);
+
+        // Upload to GPU
+        if (currentBridgeCount > 0)
+        {
+            // Resize buffer if needed
+            if (bridgeBuffer.count < currentBridgeCount)
+            {
+                bridgeBuffer.Release();
+                bridgeBuffer = new ComputeBuffer(currentBridgeCount + 1024, 40);
+            }
+
+            bridgeBuffer.SetData(bridgeList, 0, 0, currentBridgeCount);
+
+            bridgeArgs[0] = (uint)bridgeQuadMesh.GetIndexCount(0);
+            bridgeArgs[1] = (uint)currentBridgeCount;
+            bridgeArgs[2] = 0; bridgeArgs[3] = 0; bridgeArgs[4] = 0;
+            bridgeArgsBuffer.SetData(bridgeArgs);
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════
+    //  RENDERING
+    // ═════════════════════════════════════════════════════════════
+
+    void RenderFluid()
+    {
         Matrix4x4 view = cam.worldToCameraMatrix;
         Matrix4x4 proj = GL.GetGPUProjectionMatrix(cam.projectionMatrix, true);
         Matrix4x4 vp = proj * view;
 
-        // Set material properties
+        var prevRT = RenderTexture.active;
+        RenderTexture.active = FluidRT;
+        GL.Clear(true, true, new Color(0, 0, 0, 0));
+
+        // Pass 1: Draw bridges FIRST (behind particles)
+        if (enableBridges && currentBridgeCount > 0)
+        {
+            bridgeMaterial.SetBuffer("_Bridges", bridgeBuffer);
+            bridgeMaterial.SetMatrix("_ViewProj", vp);
+            bridgeMaterial.SetFloat("_EdgeSoftness", bridgeEdgeSoftness);
+            bridgeMaterial.SetFloat("_BridgeAlpha", bridgeAlpha);
+
+            bridgeMaterial.SetPass(0);
+            Graphics.DrawMeshInstancedIndirect(
+                bridgeQuadMesh, 0, bridgeMaterial, renderBounds, bridgeArgsBuffer);
+        }
+
+        // Pass 2: Draw particles ON TOP of bridges
         splatMaterial.SetBuffer("_Particles", simParticleBuffer);
         splatMaterial.SetFloat("_RenderScale", splatScale);
         splatMaterial.SetFloat("_BlobSharpness", blobSharpness);
         splatMaterial.SetMatrix("_ViewProj", vp);
 
-        // Render directly to the splat RT — bypasses all SRP command buffer issues
-        var prevRT = RenderTexture.active;
-        RenderTexture.active = SplatRT;
-        GL.Clear(true, true, Color.clear);
-
         splatMaterial.SetPass(0);
-        Graphics.DrawMeshInstancedIndirect(quadMesh, 0, splatMaterial, renderBounds, argsBuffer);
+        Graphics.DrawMeshInstancedIndirect(
+            quadMesh, 0, splatMaterial, renderBounds, argsBuffer);
 
         RenderTexture.active = prevRT;
     }
 
-    /// <summary>
-    /// Updates composite material properties from current inspector values.
-    /// The RendererFeature uses this material for the final composite pass.
-    /// </summary>
     void UpdateCompositeMaterial()
     {
-        CompositeMaterial.SetTexture("_SplatTex", SplatRT);
-        CompositeMaterial.SetFloat("_Threshold", threshold);
-        CompositeMaterial.SetFloat("_EdgeSoftness", edgeSoftness);
-        CompositeMaterial.SetFloat("_EdgeHighlight", edgeHighlight);
-        CompositeMaterial.SetFloat("_ColorSaturation", colorSaturation);
+        CompositeMaterial.SetTexture("_FluidTex", FluidRT);
         CompositeMaterial.SetFloat("_SolidColors", solidColors ? 1f : 0f);
 
-        // Pass fluid type colors to the shader for nearest-color snapping
         var types = simFluidTypes;
-        int count = Mathf.Min(types.Length, 8); // Shader supports up to 8 types
-        Vector4[] colors = new Vector4[8];
+        int count = Mathf.Min(types.Length, 16);
+        Vector4[] colors = new Vector4[16];
         for (int i = 0; i < count; i++)
-        {
             colors[i] = types[i].color;
-        }
+
         CompositeMaterial.SetFloat("_FluidTypeCount", (float)count);
         CompositeMaterial.SetVectorArray("_FluidTypeColors", colors);
     }
 
-    // ─── RT Management ───────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════
+    //  RT + MESH HELPERS
+    // ═════════════════════════════════════════════════════════════
 
-    void EnsureSplatRT()
+    void EnsureFluidRT()
     {
         int w = Mathf.Max(1, (int)(cam.pixelWidth * resolutionScale));
         int h = Mathf.Max(1, (int)(cam.pixelHeight * resolutionScale));
 
-        if (SplatRT != null && SplatRT.width == w && SplatRT.height == h)
+        if (FluidRT != null && FluidRT.width == w && FluidRT.height == h)
             return;
 
-        // Recreate RT at new resolution
-        if (SplatRT != null)
-        {
-            SplatRT.Release();
-            DestroyImmediate(SplatRT);
-        }
+        if (FluidRT != null) { FluidRT.Release(); DestroyImmediate(FluidRT); }
 
-        SplatRT = new RenderTexture(w, h, 0, RenderTextureFormat.ARGBHalf)
+        FluidRT = new RenderTexture(w, h, 0, RenderTextureFormat.ARGB32)
         {
             filterMode = FilterMode.Bilinear,
-            name = "MetaballSplatRT"
+            name = "FluidRT"
         };
-        SplatRT.Create();
-
-        Debug.Log($"[MetaballRenderer] Created splat RT: {w}x{h}");
+        FluidRT.Create();
     }
 
     void EnsureArgsBuffer()
@@ -248,37 +394,44 @@ public class MetaballFluidRenderer : MonoBehaviour
 
         args[0] = (uint)quadMesh.GetIndexCount(0);
         args[1] = (uint)simParticleCount;
-        args[2] = 0;
-        args[3] = 0;
-        args[4] = 0;
+        args[2] = 0; args[3] = 0; args[4] = 0;
         argsBuffer.SetData(args);
         argsReady = true;
-
-        Debug.Log($"[MetaballRenderer] Args ready: {simParticleCount} particles");
     }
 
-    // ─── Helpers ─────────────────────────────────────────────────
-
+    // Standard quad for particles: centered at origin
     Mesh CreateQuadMesh()
     {
-        var mesh = new Mesh { name = "MetaballQuad" };
+        var mesh = new Mesh { name = "ParticleQuad" };
         mesh.vertices = new Vector3[]
         {
-            new Vector3(-0.5f, -0.5f, 0f),
-            new Vector3( 0.5f, -0.5f, 0f),
-            new Vector3( 0.5f,  0.5f, 0f),
-            new Vector3(-0.5f,  0.5f, 0f),
+            new(-0.5f, -0.5f, 0), new(0.5f, -0.5f, 0),
+            new(0.5f, 0.5f, 0), new(-0.5f, 0.5f, 0)
         };
         mesh.uv = new Vector2[]
         {
-            new Vector2(0f, 0f),
-            new Vector2(1f, 0f),
-            new Vector2(1f, 1f),
-            new Vector2(0f, 1f),
+            new(0, 0), new(1, 0), new(1, 1), new(0, 1)
         };
-        mesh.triangles = new int[] { 0, 2, 1, 0, 3, 2 };
-        mesh.RecalculateNormals();
-        mesh.RecalculateBounds();
+        mesh.triangles = new int[] { 0, 1, 2, 0, 2, 3 };
+        mesh.UploadMeshData(true);
+        return mesh;
+    }
+
+    // Bridge quad: vertex.x = 0..1 (A to B end), vertex.y = -0.5..0.5 (side)
+    Mesh CreateBridgeQuadMesh()
+    {
+        var mesh = new Mesh { name = "BridgeQuad" };
+        mesh.vertices = new Vector3[]
+        {
+            new(0f, -0.5f, 0), new(1f, -0.5f, 0),
+            new(1f,  0.5f, 0), new(0f,  0.5f, 0)
+        };
+        mesh.uv = new Vector2[]
+        {
+            new(0, 0), new(1, 0), new(1, 1), new(0, 1)
+        };
+        mesh.triangles = new int[] { 0, 1, 2, 0, 2, 3 };
+        mesh.UploadMeshData(true);
         return mesh;
     }
 }

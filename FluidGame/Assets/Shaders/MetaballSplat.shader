@@ -1,26 +1,23 @@
-// Metaball Splat Pass
-// Renders each particle as a soft disk with additive blending.
-// The profile is flat in the center and drops off only near the edge,
-// which produces uniform color density across overlapping particles
-// (no bright centers, no neon glow).
-//
-// Output: RGB = particle_color * weight, A = weight
-// The composite pass divides rgb/a to recover the average color.
+// Fluid Particle Splat — Alpha Blended
+// Renders each particle as a colored circle with soft edges.
+// Uses standard alpha blending (SrcAlpha, OneMinusSrcAlpha).
+// Overlapping same-color particles merge seamlessly.
+// Result: opaque colored blobs on transparent background.
 
 Shader "FluidSim/MetaballSplat"
 {
     Properties
     {
         _RenderScale ("Render Scale", Float) = 0.35
-        _BlobSharpness ("Blob Sharpness", Float) = 3.0
+        _BlobSharpness ("Blob Sharpness", Float) = 2.0
     }
 
     SubShader
     {
         Tags { "Queue" = "Transparent" }
 
-        // Additive blending: accumulate (color*weight) and (weight)
-        Blend One One
+        // Standard alpha blending — NOT additive
+        Blend SrcAlpha OneMinusSrcAlpha
         ZWrite Off
         ZTest Always
         Cull Off
@@ -37,7 +34,7 @@ Shader "FluidSim/MetaballSplat"
                 float2 position;
                 float2 velocity;
                 int typeIndex;
-                float density;
+                float density;  // Stores mass for merged particles
                 float pressure;
                 float alive;
                 float4 color;
@@ -66,8 +63,10 @@ Shader "FluidSim/MetaballSplat"
                 v2f o;
                 Particle p = _Particles[instanceID];
 
-                // Hide absorbed particles by collapsing their quad to zero size
-                float scale = (p.alive > 0.5) ? _RenderScale : 0.0;
+                // Scale merged particles larger (area-preserving)
+                float massScale = (p.density > 0.01) ? pow(p.density, 0.35) : 1.0;
+                float scale = (p.alive > 0.5) ? _RenderScale * massScale : 0.0;
+
                 float3 worldPos = float3(p.position, 0.0) + v.vertex.xyz * scale;
                 o.pos = mul(_ViewProj, float4(worldPos, 1.0));
                 o.uv = v.uv;
@@ -78,17 +77,17 @@ Shader "FluidSim/MetaballSplat"
             float4 frag(v2f i) : SV_Target
             {
                 float2 offset = i.uv - 0.5;
-                float dist = length(offset) * 2.0; // normalized: 0 at center, 1 at quad edge
+                float dist = length(offset) * 2.0; // 0 at center, 1 at edge
 
-                // Flat-top profile: weight is 1.0 in the center region,
-                // then drops smoothly to 0 near the edge.
-                // This avoids bright centers — all overlapping particles
-                // contribute equally regardless of where you sample.
-                float weight = 1.0 - smoothstep(0.5, 1.0, dist);
+                // Alpha: fully opaque at center, fades at edge
+                float alpha = saturate(1.0 - pow(dist, _BlobSharpness));
 
-                if (weight < 0.005) discard;
+                if (alpha < 0.01) discard;
 
-                return float4(i.color.rgb * weight, weight);
+                // Output: particle color with alpha for soft edges
+                // Where circles overlap (same color), alpha blending
+                // just reinforces the same color = seamless blob.
+                return float4(i.color.rgb, alpha);
             }
             ENDCG
         }

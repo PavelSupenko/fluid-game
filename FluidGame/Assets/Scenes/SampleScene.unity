@@ -201,7 +201,7 @@ Camera:
   m_Enabled: 1
   serializedVersion: 2
   m_ClearFlags: 2
-  m_BackGroundColor: {r: 0.828841, g: 0.8954028, b: 1, a: 0}
+  m_BackGroundColor: {r: 0.7783019, g: 0.8627583, b: 1, a: 0}
   m_projectionMatrixMode: 1
   m_GateFitMode: 2
   m_FOVAxisMode: 0
@@ -269,15 +269,18 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 935a88b7aaf14bb4ca2342047847414e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  showMetaballs: 0
-  splatScale: 0.35
-  blobSharpness: 3
-  resolutionScale: 0.75
-  solidColors: 0
-  threshold: 0.35
-  edgeSoftness: 0.05
-  edgeHighlight: -0.15
-  colorSaturation: 1.1
+  showMetaballs: 1
+  splatScale: 0.09
+  blobSharpness: 8
+  resolutionScale: 0.85
+  enableBridges: 1
+  bridgeRadiusMultiplier: 1.5
+  bridgeAlpha: 0.9
+  bridgeEdgeSoftness: 1.5
+  bridgeWidthMultiplier: 2.5
+  bridgeRebuildInterval: 5
+  solidColors: 1
+  showDebugRT: 0
 --- !u!1 &619394800
 GameObject:
   m_ObjectHideFlags: 0
@@ -374,7 +377,6 @@ GameObject:
   - component: {fileID: 1807844250}
   - component: {fileID: 1807844255}
   - component: {fileID: 1807844260}
-  - component: {fileID: 1807844254}
   - component: {fileID: 1807844257}
   - component: {fileID: 1807844259}
   - component: {fileID: 1807844258}
@@ -412,20 +414,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &1807844254
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1807844249}
-  m_Enabled: 0
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 606833391ba58f444bd05a6828892c7a, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  lineColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
-  inset: 0.02
 --- !u!114 &1807844255
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -438,9 +426,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 884c2fdaccf753948b898084e94c2388, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  showParticles: 1
+  showParticles: 0
   particleMaterial: {fileID: 2100000, guid: 7680ba8a5f9b9bf45bd4c826cfb6fa76, type: 2}
-  renderScale: 0.12
+  renderScale: 0.078
 --- !u!114 &1807844257
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -513,25 +501,32 @@ MonoBehaviour:
   particleSpacing: 0.15
   particleRadius: 0.05
   smoothingRadius: 0.4
-  particleMass: 1
-  restDensity: 50
-  autoRestDensity: 1
-  pressureStiffness: 80
-  nearPressureStiffness: 5
-  cohesionStrength: 15
-  interTypeRepulsion: 8
-  surfaceTensionStrength: 5
+  particleMass: 3
+  restDensity: 777
+  autoRestDensity: 0
+  pressureStiffness: 200
+  nearPressureStiffness: 15
+  cohesionStrength: 30
+  interTypeRepulsion: 15
+  surfaceTensionStrength: 10
   uniformFluid: 0
-  gravity: {x: 0, y: -3}
+  collisionRadiusFactor: 1.2
+  collisionPushStrength: 1
+  enableMerging: 1
+  maxMergeSize: 50
+  mergeInterval: 20
+  mergeVelocityThreshold: 1.12
+  cohesionMassExponent: 1.5
+  gravity: {x: 0, y: -9}
   boundaryDamping: 0.3
   velocityDamping: 0.98
   timeScale: 1
   subSteps: 3
-  maxSpeed: 8
-  sleepVelocityThreshold: 0.22
-  sleepFramesRequired: 10
-  wakeBudgetPerFrame: 50
-  wakeRadius: 1.5
+  maxSpeed: 0.4
+  sleepVelocityThreshold: 0.15
+  sleepFramesRequired: 20
+  wakeBudgetPerFrame: 70
+  wakeRadius: 1.3
   startSleeping: 1
   fluidTypes:
   - name: Heavy (Red)
