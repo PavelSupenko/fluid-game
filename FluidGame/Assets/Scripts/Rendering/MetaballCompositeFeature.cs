@@ -3,15 +3,11 @@ using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
 
 /// <summary>
-/// URP Renderer Feature for the metaball composite pass.
-///
-/// This feature does ONE thing: blits the pre-rendered splat texture
-/// over the camera output using the composite shader. The heavy lifting
-/// (rendering particle blobs to SplatRT) is done by MetaballFluidRenderer
-/// using direct Graphics calls, so this feature is intentionally minimal.
+/// URP Renderer Feature that composites the fluid texture over the camera output.
+/// Uses the MetaballFluidRenderer's FluidRT and CompositeMaterial.
 ///
 /// SETUP:
-///   1. Select your URP Renderer Asset
+///   1. Select your URP Renderer Asset (e.g. UniversalRenderPipelineAsset_Renderer)
 ///   2. Click "Add Renderer Feature" → MetaballCompositeFeature
 ///   3. Make sure MetaballFluidRenderer is on your Main Camera
 /// </summary>
@@ -28,38 +24,27 @@ public class MetaballCompositeFeature : ScriptableRendererFeature
 
     public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
     {
-        // Skip preview cameras and overlays
         if (renderingData.cameraData.cameraType != CameraType.Game &&
             renderingData.cameraData.cameraType != CameraType.SceneView)
             return;
 
-        // Only enqueue if the metaball renderer exists and has data
         var metaball = MetaballFluidRenderer.Instance;
         if (metaball == null || !metaball.showMetaballs) return;
-        if (metaball.SplatRT == null || metaball.CompositeMaterial == null) return;
+        if (metaball.FluidRT == null || metaball.CompositeMaterial == null) return;
 
-        pass.SetData(metaball.SplatRT, metaball.CompositeMaterial);
+        pass.SetData(metaball.FluidRT, metaball.CompositeMaterial);
         renderer.EnqueuePass(pass);
     }
 
-    protected override void Dispose(bool disposing)
-    {
-        pass?.Dispose();
-    }
+    protected override void Dispose(bool disposing) { pass?.Dispose(); }
 }
 
-/// <summary>
-/// Simple render pass that composites the metaball splat texture onto the camera output.
-/// Only uses cmd.Blit — no complex draw calls.
-/// </summary>
 public class MetaballCompositePass : ScriptableRenderPass
 {
-    private const string PROFILER_TAG = "MetaballComposite";
-
-    private RenderTexture splatRT;
+    private const string PROFILER_TAG = "FluidComposite";
+    private RenderTexture fluidRT;
     private Material compositeMaterial;
-
-    private static readonly int TempTargetId = Shader.PropertyToID("_MetaballTempTarget");
+    private static readonly int TempId = Shader.PropertyToID("_FluidCompositeTmp");
 
     public MetaballCompositePass(RenderPassEvent evt)
     {
@@ -67,48 +52,37 @@ public class MetaballCompositePass : ScriptableRenderPass
         profilingSampler = new ProfilingSampler(PROFILER_TAG);
     }
 
-    public void SetData(RenderTexture splat, Material composite)
+    public void SetData(RenderTexture fluid, Material composite)
     {
-        splatRT = splat;
+        fluidRT = fluid;
         compositeMaterial = composite;
     }
 
     public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
     {
-        if (splatRT == null || compositeMaterial == null) return;
+        if (fluidRT == null || compositeMaterial == null) return;
 
         var cmd = CommandBufferPool.Get(PROFILER_TAG);
-
-        // Get the camera's current color target
-        // cmd.Blit works with RenderTargetIdentifier, and both RTHandle and
-        // RenderTargetIdentifier are accepted — this works across URP versions.
         var cameraDesc = renderingData.cameraData.cameraTargetDescriptor;
         cameraDesc.depthBufferBits = 0;
 
-        // Create a temporary RT to copy the current scene into
-        cmd.GetTemporaryRT(TempTargetId, cameraDesc, FilterMode.Bilinear);
+        cmd.GetTemporaryRT(TempId, cameraDesc, FilterMode.Bilinear);
+        
 
-        // Step 1: Copy the current camera output to the temp RT
-        // In URP, the source of Blit (first param) reads from the active camera target
-        // when using BuiltinRenderTextureType.CameraTarget
-        cmd.Blit(BuiltinRenderTextureType.CameraTarget, TempTargetId);
+        // Copy current camera output to temp
+        cmd.Blit(BuiltinRenderTextureType.CameraTarget, TempId);
 
-        // Step 2: Set the splat texture as a global so the composite shader can access it
-        cmd.SetGlobalTexture("_SplatTex", splatRT);
+        // Set the fluid texture
+        cmd.SetGlobalTexture("_FluidTex", fluidRT);
 
-        // Step 3: Blit through the composite shader back to the camera target
-        // The composite shader reads _MainTex (= temp, i.e. the scene) and
-        // _SplatTex (= fluid blobs) and combines them.
-        cmd.Blit(TempTargetId, BuiltinRenderTextureType.CameraTarget, compositeMaterial);
+        // Blit through composite shader: reads _MainTex (scene) + _FluidTex (fluid)
+        cmd.Blit(TempId, BuiltinRenderTextureType.CameraTarget, compositeMaterial);
 
-        cmd.ReleaseTemporaryRT(TempTargetId);
+        cmd.ReleaseTemporaryRT(TempId);
 
         context.ExecuteCommandBuffer(cmd);
         CommandBufferPool.Release(cmd);
     }
 
-    public void Dispose()
-    {
-        // Nothing to dispose — we don't own the materials or textures
-    }
+    public void Dispose() { }
 }

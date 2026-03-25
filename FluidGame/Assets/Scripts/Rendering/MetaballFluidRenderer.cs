@@ -1,72 +1,48 @@
 using UnityEngine;
 
 /// <summary>
-/// Renders fluid particles as a smooth metaball surface.
+/// Renders fluid particles as smooth colored blobs using direct alpha blending.
 /// 
-/// SETUP: Attach this component to the Main Camera.
-///        Also add the MetaballCompositeFeature to your URP Renderer Asset.
+/// APPROACH: Renders particles as soft-edge circles to an RGBA render texture
+/// using standard alpha blending (SrcAlpha/OneMinusSrcAlpha). Same-color particles
+/// overlap seamlessly. Then composites over the scene using a simple blit.
 ///
-/// This component handles the SPLAT pass: rendering soft gaussian blobs
-/// to an offscreen RenderTexture using direct Graphics calls.
-/// The composite pass (thresholding + overlay) is done by MetaballCompositeFeature.
+/// NO additive blending. NO weight accumulation. NO composite shader math.
+/// Just colored circles that blend properly on any background.
 ///
-/// The splat is rendered in LateUpdate using Graphics.DrawMeshInstancedIndirect
-/// directly — NOT through the SRP command buffer — which avoids URP compatibility issues.
+/// SETUP: Put this on the Main Camera. Enable showMetaballs.
+///        Add MetaballCompositeFeature to URP Renderer Asset.
 /// </summary>
 [RequireComponent(typeof(Camera))]
 public class MetaballFluidRenderer : MonoBehaviour
 {
-    // ─── Singleton for RendererFeature access ────────────────────
     public static MetaballFluidRenderer Instance { get; private set; }
 
     [Header("Enable / Disable")]
     public bool showMetaballs = true;
 
-    [Header("Splat Settings")]
-    [Tooltip("Size of each particle's gaussian blob. Larger = more merging.")]
-    public float splatScale = 0.35f;
+    [Header("Rendering")]
+    [Tooltip("Size of each particle blob relative to spacing. Larger = more overlap/merging.")]
+    public float splatScale = 0.1f;
 
-    [Tooltip("Falloff sharpness. Lower = softer blobs, more merging.")]
+    [Tooltip("Edge softness of each particle. Lower = sharper circles, higher = softer merge.")]
     [Range(1f, 8f)]
-    public float blobSharpness = 3f;
+    public float blobSharpness = 2f;
 
     [Tooltip("Render target resolution multiplier")]
     [Range(0.25f, 1f)]
     public float resolutionScale = 0.75f;
 
-    [Header("Composite Settings")]
-    [Tooltip("When ON, each pixel snaps to the nearest fluid type color. " +
-             "When OFF, colors blend smoothly at boundaries between types.")]
+    [Header("Snap to Palette")]
+    [Tooltip("Each pixel gets the exact palette color (no blending between types).")]
     public bool solidColors = true;
 
-    [Tooltip("Accumulated weight threshold for solid fluid. Lower = thicker.")]
-    [Range(0.01f, 2f)]
-    public float threshold = 0.35f;
-
-    [Tooltip("Smoothness of the fluid edge. Lower = sharper, more paint-like.")]
-    [Range(0.01f, 0.5f)]
-    public float edgeSoftness = 0.05f;
-
-    [Tooltip("Edge shading: negative = darken edges (paint depth), positive = bright rim (neon).")]
-    [Range(-1f, 1f)]
-    public float edgeHighlight = -0.15f;
-
-    [Tooltip("Color vibrancy boost.")]
-    [Range(0.5f, 2f)]
-    public float colorSaturation = 1.1f;
+    [Header("Debug")]
+    public bool showDebugRT = false;
 
     // ─── Public for RendererFeature ──────────────────────────────
 
-    /// <summary>
-    /// The RenderTexture containing accumulated splat data.
-    /// Read by MetaballCompositeFeature for the composite pass.
-    /// </summary>
-    public RenderTexture SplatRT { get; private set; }
-
-    /// <summary>
-    /// Composite material with current settings applied.
-    /// Read by MetaballCompositeFeature.
-    /// </summary>
+    public RenderTexture FluidRT { get; private set; }
     public Material CompositeMaterial { get; private set; }
 
     // ─── Internals ───────────────────────────────────────────────
@@ -74,6 +50,7 @@ public class MetaballFluidRenderer : MonoBehaviour
     private ComputeBuffer simParticleBuffer;
     private int simParticleCount;
     private FluidTypeDefinition[] simFluidTypes;
+    private float simParticleSpacing;
     private Camera cam;
     private Material splatMaterial;
     private Mesh quadMesh;
@@ -82,106 +59,111 @@ public class MetaballFluidRenderer : MonoBehaviour
     private Bounds renderBounds;
     private bool argsReady;
 
-    // ─── Lifecycle ───────────────────────────────────────────────
-
-    void OnEnable()
-    {
-        Instance = this;
-    }
-
-    void OnDisable()
-    {
-        if (Instance == this) Instance = null;
-    }
+    void OnEnable() { Instance = this; }
+    void OnDisable() { if (Instance == this) Instance = null; }
 
     void Start()
     {
         cam = GetComponent<Camera>();
-        // Find whichever simulation is active
-        var jobs = FindObjectOfType<FluidSimulationJobs>();
 
-        if (jobs != null && jobs.enabled)
+        // Disable circle renderer if present
+        var circleRenderer = FindObjectOfType<FluidRendererGPU>();
+        if (circleRenderer != null && circleRenderer.enabled)
+            circleRenderer.showParticles = false;
+
+        var sim = FindObjectOfType<FluidSimulationJobs>();
+        if (sim != null && sim.enabled)
         {
-            simParticleBuffer = jobs.ParticleBuffer;
-            simParticleCount = jobs.ParticleCount;
-            simFluidTypes = jobs.fluidTypes;
+            simParticleBuffer = sim.ParticleBuffer;
+            simParticleCount = sim.ParticleCount;
+            simFluidTypes = sim.fluidTypes;
+            simParticleSpacing = sim.particleSpacing;
+
+            if (simParticleSpacing > 0.001f)
+                splatScale = simParticleSpacing * 1.8f;
         }
         else
         {
-            Debug.LogError("[MetaballRenderer] No active simulation found!");
+            Debug.LogError("[MetaballRenderer] No FluidSimulationJobs found!");
             enabled = false;
             return;
         }
 
-        // Create materials from shaders
+        // Splat material: alpha blended colored circles
         var splatShader = Shader.Find("FluidSim/MetaballSplat");
-        var compositeShader = Shader.Find("FluidSim/MetaballComposite");
-
-        if (splatShader == null || compositeShader == null)
+        if (splatShader == null)
         {
-            Debug.LogError("[MetaballRenderer] Shaders not found! " +
-                           "Ensure MetaballSplat.shader and MetaballComposite.shader are in the project.");
+            Debug.LogError("[MetaballRenderer] MetaballSplat shader not found!");
             enabled = false;
             return;
         }
-
         splatMaterial = new Material(splatShader) { hideFlags = HideFlags.HideAndDontSave };
-        CompositeMaterial = new Material(compositeShader) { hideFlags = HideFlags.HideAndDontSave };
+
+        // Composite material: simple blit overlay
+        var compShader = Shader.Find("FluidSim/MetaballComposite");
+        if (compShader == null)
+        {
+            Debug.LogError("[MetaballRenderer] MetaballComposite shader not found!");
+            enabled = false;
+            return;
+        }
+        CompositeMaterial = new Material(compShader) { hideFlags = HideFlags.HideAndDontSave };
 
         quadMesh = CreateQuadMesh();
         renderBounds = new Bounds(Vector3.zero, Vector3.one * 200f);
         argsBuffer = new ComputeBuffer(1, 5 * sizeof(uint), ComputeBufferType.IndirectArguments);
 
-        Debug.Log("[MetaballRenderer] Initialized. Make sure MetaballCompositeFeature " +
-                  "is added to your URP Renderer Asset.");
+        Debug.Log($"[MetaballRenderer] Initialized. splatScale={splatScale:F3}");
     }
 
     void LateUpdate()
     {
-        if (!showMetaballs || simParticleBuffer == null)
-            return;
+        if (!showMetaballs || simParticleBuffer == null) return;
 
         EnsureArgsBuffer();
-        EnsureSplatRT();
-        RenderSplat();
+        EnsureFluidRT();
+        RenderFluid();
         UpdateCompositeMaterial();
+    }
+
+    void OnGUI()
+    {
+        if (showDebugRT && FluidRT != null)
+        {
+            float size = 300f;
+            float aspect = (float)FluidRT.width / FluidRT.height;
+            Rect rect = new Rect(10, Screen.height - size / aspect - 10, size, size / aspect);
+            GUI.DrawTexture(rect, FluidRT);
+            GUI.Label(new Rect(10, rect.y - 20, 300, 20),
+                $"Fluid RT: {FluidRT.width}x{FluidRT.height}");
+        }
     }
 
     void OnDestroy()
     {
         argsBuffer?.Release();
-        if (SplatRT != null)
-        {
-            SplatRT.Release();
-            DestroyImmediate(SplatRT);
-        }
+        if (FluidRT != null) { FluidRT.Release(); DestroyImmediate(FluidRT); }
         if (splatMaterial != null) DestroyImmediate(splatMaterial);
         if (CompositeMaterial != null) DestroyImmediate(CompositeMaterial);
     }
 
-    // ─── Splat Rendering ─────────────────────────────────────────
+    // ─── Render fluid particles to RT ────────────────────────────
 
-    /// <summary>
-    /// Renders all particles as soft gaussian blobs to SplatRT using direct Graphics calls.
-    /// Additive blending accumulates (color * weight) in RGB and (weight) in alpha.
-    /// </summary>
-    void RenderSplat()
+    void RenderFluid()
     {
-        // Compute View-Projection matrix. renderIntoTexture=true handles Y-flip.
         Matrix4x4 view = cam.worldToCameraMatrix;
         Matrix4x4 proj = GL.GetGPUProjectionMatrix(cam.projectionMatrix, true);
         Matrix4x4 vp = proj * view;
 
-        // Set material properties
         splatMaterial.SetBuffer("_Particles", simParticleBuffer);
         splatMaterial.SetFloat("_RenderScale", splatScale);
         splatMaterial.SetFloat("_BlobSharpness", blobSharpness);
         splatMaterial.SetMatrix("_ViewProj", vp);
 
-        // Render directly to the splat RT — bypasses all SRP command buffer issues
+        // Render to fluid RT with CLEAR to transparent
         var prevRT = RenderTexture.active;
-        RenderTexture.active = SplatRT;
-        GL.Clear(true, true, Color.clear);
+        RenderTexture.active = FluidRT;
+        GL.Clear(true, true, new Color(0, 0, 0, 0)); // Fully transparent background
 
         splatMaterial.SetPass(0);
         Graphics.DrawMeshInstancedIndirect(quadMesh, 0, splatMaterial, renderBounds, argsBuffer);
@@ -189,56 +171,40 @@ public class MetaballFluidRenderer : MonoBehaviour
         RenderTexture.active = prevRT;
     }
 
-    /// <summary>
-    /// Updates composite material properties from current inspector values.
-    /// The RendererFeature uses this material for the final composite pass.
-    /// </summary>
     void UpdateCompositeMaterial()
     {
-        CompositeMaterial.SetTexture("_SplatTex", SplatRT);
-        CompositeMaterial.SetFloat("_Threshold", threshold);
-        CompositeMaterial.SetFloat("_EdgeSoftness", edgeSoftness);
-        CompositeMaterial.SetFloat("_EdgeHighlight", edgeHighlight);
-        CompositeMaterial.SetFloat("_ColorSaturation", colorSaturation);
+        CompositeMaterial.SetTexture("_FluidTex", FluidRT);
         CompositeMaterial.SetFloat("_SolidColors", solidColors ? 1f : 0f);
 
-        // Pass fluid type colors to the shader for nearest-color snapping
         var types = simFluidTypes;
-        int count = Mathf.Min(types.Length, 8); // Shader supports up to 8 types
-        Vector4[] colors = new Vector4[8];
+        int count = Mathf.Min(types.Length, 16);
+        Vector4[] colors = new Vector4[16];
         for (int i = 0; i < count; i++)
-        {
             colors[i] = types[i].color;
-        }
+
         CompositeMaterial.SetFloat("_FluidTypeCount", (float)count);
         CompositeMaterial.SetVectorArray("_FluidTypeColors", colors);
     }
 
     // ─── RT Management ───────────────────────────────────────────
 
-    void EnsureSplatRT()
+    void EnsureFluidRT()
     {
         int w = Mathf.Max(1, (int)(cam.pixelWidth * resolutionScale));
         int h = Mathf.Max(1, (int)(cam.pixelHeight * resolutionScale));
 
-        if (SplatRT != null && SplatRT.width == w && SplatRT.height == h)
+        if (FluidRT != null && FluidRT.width == w && FluidRT.height == h)
             return;
 
-        // Recreate RT at new resolution
-        if (SplatRT != null)
-        {
-            SplatRT.Release();
-            DestroyImmediate(SplatRT);
-        }
+        if (FluidRT != null) { FluidRT.Release(); DestroyImmediate(FluidRT); }
 
-        SplatRT = new RenderTexture(w, h, 0, RenderTextureFormat.ARGBHalf)
+        FluidRT = new RenderTexture(w, h, 0, RenderTextureFormat.ARGB32)
         {
             filterMode = FilterMode.Bilinear,
-            name = "MetaballSplatRT"
+            name = "FluidRT"
         };
-        SplatRT.Create();
-
-        Debug.Log($"[MetaballRenderer] Created splat RT: {w}x{h}");
+        FluidRT.Create();
+        Debug.Log($"[MetaballRenderer] Created fluid RT: {w}x{h}");
     }
 
     void EnsureArgsBuffer()
@@ -248,37 +214,25 @@ public class MetaballFluidRenderer : MonoBehaviour
 
         args[0] = (uint)quadMesh.GetIndexCount(0);
         args[1] = (uint)simParticleCount;
-        args[2] = 0;
-        args[3] = 0;
-        args[4] = 0;
+        args[2] = 0; args[3] = 0; args[4] = 0;
         argsBuffer.SetData(args);
         argsReady = true;
-
-        Debug.Log($"[MetaballRenderer] Args ready: {simParticleCount} particles");
     }
-
-    // ─── Helpers ─────────────────────────────────────────────────
 
     Mesh CreateQuadMesh()
     {
         var mesh = new Mesh { name = "MetaballQuad" };
         mesh.vertices = new Vector3[]
         {
-            new Vector3(-0.5f, -0.5f, 0f),
-            new Vector3( 0.5f, -0.5f, 0f),
-            new Vector3( 0.5f,  0.5f, 0f),
-            new Vector3(-0.5f,  0.5f, 0f),
+            new(-0.5f, -0.5f, 0), new(0.5f, -0.5f, 0),
+            new(0.5f, 0.5f, 0), new(-0.5f, 0.5f, 0)
         };
         mesh.uv = new Vector2[]
         {
-            new Vector2(0f, 0f),
-            new Vector2(1f, 0f),
-            new Vector2(1f, 1f),
-            new Vector2(0f, 1f),
+            new(0, 0), new(1, 0), new(1, 1), new(0, 1)
         };
-        mesh.triangles = new int[] { 0, 2, 1, 0, 3, 2 };
-        mesh.RecalculateNormals();
-        mesh.RecalculateBounds();
+        mesh.triangles = new int[] { 0, 1, 2, 0, 2, 3 };
+        mesh.UploadMeshData(true);
         return mesh;
     }
 }

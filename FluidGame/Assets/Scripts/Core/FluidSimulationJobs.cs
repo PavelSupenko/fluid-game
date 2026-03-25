@@ -50,14 +50,35 @@ public class FluidSimulationJobs : MonoBehaviour
     // ─── Particle Collision ────────────────────────────────────────
     [Header("Particle Collision")]
     [Tooltip("Minimum distance between particles as a factor of particleSpacing. " +
-             "0.8 = particles can't get closer than 80% of their initial spacing.")]
-    [Range(0.3f, 1.0f)]
-    public float collisionRadiusFactor = 0.75f;
+             "0.85 = particles can't get closer than 85% of their initial spacing.")]
+    [Range(0.3f, 1.2f)]
+    public float collisionRadiusFactor = 0.85f;
 
-    [Tooltip("How strongly overlapping particles push apart. " +
-             "Higher = more rigid, prevents compression. Lower = softer.")]
+    [Tooltip("How strongly overlapping particles push apart per sub-step. " +
+             "1.0 = full correction in one step (rigid). 0.5 = half correction (softer).")]
     [Range(0.1f, 1.0f)]
-    public float collisionPushStrength = 0.5f;
+    public float collisionPushStrength = 0.8f;
+
+    // ─── Particle Merging (LOD) ──────────────────────────────────
+    [Header("Particle Merging")]
+    [Tooltip("Enable merging of nearby same-type particles into larger droplets")]
+    public bool enableMerging = true;
+
+    [Tooltip("Max original particles that can merge into one large droplet")]
+    [Range(2, 50)]
+    public int maxMergeSize = 4;
+
+    [Tooltip("How often to run the merge pass (every N frames). Lower = more responsive.")]
+    [Range(1, 30)]
+    public int mergeInterval = 10;
+
+    [Tooltip("Particles merge only when their speed is below this threshold")]
+    public float mergeVelocityThreshold = 0.1f;
+
+    [Tooltip("Cohesion power exponent for merged particles. " +
+             "1.0 = linear, 1.5 = super-linear (big drops attract more aggressively)")]
+    [Range(1f, 2.5f)]
+    public float cohesionMassExponent = 1.5f;
 
     // ─── Physics ─────────────────────────────────────────────────
     [Header("Physics")]
@@ -122,6 +143,10 @@ public class FluidSimulationJobs : MonoBehaviour
     private NativeArray<FluidTypeGPU> fluidTypeData;
     private NativeArray<float2> collisionCorrections;
 
+    // Per-particle mass (separate from struct to keep 48-byte GPU layout)
+    // Default 1.0, increases when particles merge
+    private NativeArray<float> particleMasses;
+
     // Sleep state (separate arrays to keep ParticleData at 48 bytes for GPU)
     private NativeArray<int> sleepState;     // 0 = awake, 1 = sleeping
     private NativeArray<int> sleepCounter;   // Frames at low velocity
@@ -174,6 +199,10 @@ public class FluidSimulationJobs : MonoBehaviour
         InitNativeData();
     }
 
+    // Track whether any particle has been absorbed (not just clicked)
+    private bool hasInteracted = false;
+    private int previousAliveCount;
+
     void FixedUpdate()
     {
         float dt = (Time.fixedDeltaTime * timeScale) / subSteps;
@@ -181,15 +210,36 @@ public class FluidSimulationJobs : MonoBehaviour
         for (int step = 0; step < subSteps; step++)
             RunSimulationStep(dt);
 
-        // All wake checks run AFTER simulation so spatial hash is fresh.
+        // Wake near flask — always allowed (just wakes target-type particles,
+        // they need to move toward flask to get absorbed)
         if (flaskActive)
         {
             WakeNearPoint(flaskPos, wakeRadius);
-            // WakeColumnAbove(flaskPos);
+            WakeColumnAbove(flaskPos);
         }
 
-        CascadeWake();
-        DetectFloatingIslands();  // Grid-level check — cheap, catches all floating islands
+        // Check if any particle was actually absorbed this frame
+        if (!hasInteracted)
+        {
+            int currentAlive = 0;
+            for (int i = 0; i < ParticleCount; i++)
+                if (particles[i].alive > 0.5f) currentAlive++;
+
+            if (currentAlive < previousAliveCount)
+            {
+                hasInteracted = true;
+                Debug.Log($"[FluidSimJobs] First absorption detected — wake systems activated");
+            }
+            previousAliveCount = currentAlive;
+        }
+
+        // Aggressive wake systems — only after first real absorption
+        if (hasInteracted)
+        {
+            CascadeWake();
+            DetectFloatingIslands();
+            MergeParticles();
+        }
 
         UploadToGPU();
     }
@@ -247,8 +297,8 @@ public class FluidSimulationJobs : MonoBehaviour
         float s = particleSpacing;
         smoothingRadius = s * 2.5f;
         particleRadius = s * 0.4f;
-        nearPressureStiffness = 10f;
-        pressureStiffness = 120f;
+        nearPressureStiffness = 15f;
+        pressureStiffness = 200f;
         subSteps = Mathf.Max(subSteps, 4);
         wakeRadius = smoothingRadius * 4f;
 
@@ -275,6 +325,8 @@ public class FluidSimulationJobs : MonoBehaviour
         densities = new NativeArray<float>(ParticleCount, Allocator.Persistent);
         pressures = new NativeArray<float>(ParticleCount, Allocator.Persistent);
         collisionCorrections = new NativeArray<float2>(ParticleCount, Allocator.Persistent);
+        particleMasses = new NativeArray<float>(ParticleCount, Allocator.Persistent);
+        for (int i = 0; i < ParticleCount; i++) particleMasses[i] = 1f;
         sleepState = new NativeArray<int>(ParticleCount, Allocator.Persistent);
         sleepCounter = new NativeArray<int>(ParticleCount, Allocator.Persistent);
 
@@ -324,6 +376,7 @@ public class FluidSimulationJobs : MonoBehaviour
         UploadToGPU();
 
         AwakeCount = startSleeping ? 0 : ParticleCount;
+        previousAliveCount = ParticleCount;
         Debug.Log($"[FluidSimJobs] Init: {ParticleCount} particles, " +
                   $"grid {hashGridW}x{hashGridH}, rest={restDensity:F1}, " +
                   $"awake={AwakeCount}, sleep={startSleeping}");
@@ -550,6 +603,16 @@ public class FluidSimulationJobs : MonoBehaviour
             grounded[x] = cellCounts[x] > 0; // y=0 row
         }
 
+        // Left and right wall columns are also grounded (wall support).
+        // This prevents particles at container edges from being detected as floating.
+        for (int y = 0; y < hashGridH; y++)
+        {
+            int leftCi = y * hashGridW + 0;
+            int rightCi = y * hashGridW + (hashGridW - 1);
+            if (cellCounts[leftCi] > 0) grounded[leftCi] = true;
+            if (cellCounts[rightCi] > 0) grounded[rightCi] = true;
+        }
+
         // Propagate upward: cell is grounded if has particles AND
         // any of (x-1,y-1), (x,y-1), (x+1,y-1) is grounded
         for (int y = 1; y < hashGridH; y++)
@@ -714,13 +777,13 @@ public class FluidSimulationJobs : MonoBehaviour
             sortedIndices = sortedIndices,
             cellCounts = cellCounts,
             cellOffsets = cellOffsets,
+            particleMasses = particleMasses,
             densities = densities,
             pressures = pressures,
             cellSize = cellSize,
             containerMin = new float2(containerMin.x, containerMin.y),
             gridW = hashGridW, gridH = hashGridH,
             smoothingRadiusSqr = smoothingRadius * smoothingRadius,
-            particleMass = particleMass,
             restDensity = restDensity,
             pressureStiffness = pressureStiffness,
             poly6Coeff = 4f / (math.PI * math.pow(smoothingRadius, 8))
@@ -739,6 +802,7 @@ public class FluidSimulationJobs : MonoBehaviour
             pressures = pressures,
             forces = forces,
             fluidTypeData = fluidTypeData,
+            particleMasses = particleMasses,
             cellSize = cellSize,
             containerMin = new float2(containerMin.x, containerMin.y),
             gridW = hashGridW, gridH = hashGridH,
@@ -749,6 +813,7 @@ public class FluidSimulationJobs : MonoBehaviour
             cohesionStrength = cohesionStrength,
             interTypeRepulsion = interTypeRepulsion,
             surfaceTensionStrength = surfaceTensionStrength,
+            cohesionMassExponent = cohesionMassExponent,
             uniformFluid = uniformFluid,
             spikyGradCoeff = -10f / (math.PI * math.pow(smoothingRadius, 5)),
             viscLaplCoeff = 40f / (math.PI * math.pow(smoothingRadius, 5))
@@ -762,6 +827,7 @@ public class FluidSimulationJobs : MonoBehaviour
             sleepState = sleepState,
             forces = forces,
             densities = densities,
+            particleMasses = particleMasses,
             fluidTypeData = fluidTypeData,
             gravity = new float2(gravity.x, gravity.y),
             dt = dt,
@@ -789,6 +855,7 @@ public class FluidSimulationJobs : MonoBehaviour
             sortedIndices = sortedIndices,
             cellCounts = cellCounts,
             cellOffsets = cellOffsets,
+            particleMasses = particleMasses,
             collisionCorrections = collisionCorrections,
             cellSize = cellSize,
             containerMin = new float2(containerMin.x, containerMin.y),
@@ -825,12 +892,15 @@ public class FluidSimulationJobs : MonoBehaviour
         for (int i = 0; i < ParticleCount; i++)
         {
             var p = particles[i];
+            // Encode mass as density for GPU — shader can use it for particle size.
+            // sqrt(mass) gives area-preserving radius scaling.
+            float renderMass = particleMasses[i];
             Particles[i] = new FluidParticle
             {
                 position = new Vector2(p.position.x, p.position.y),
                 velocity = new Vector2(p.velocity.x, p.velocity.y),
                 typeIndex = p.typeIndex,
-                density = densities[i],
+                density = renderMass, // Shader reads this for size scaling
                 pressure = pressures[i],
                 alive = p.alive,
                 color = new Color(p.color.x, p.color.y, p.color.z, p.color.w)
@@ -841,6 +911,111 @@ public class FluidSimulationJobs : MonoBehaviour
         particleBuffer.SetData(Particles);
     }
 
+    // ─── Particle Merging ────────────────────────────────────────
+
+    /// <summary>
+    /// Merges nearby same-type particles into larger droplets.
+    /// Uses spatial hash for neighbor lookup. Runs on main thread
+    /// every mergeInterval frames.
+    ///
+    /// When particle A absorbs particle B:
+    ///   - A.mass += B.mass (up to maxMergeSize)
+    ///   - A.position = weighted center of mass
+    ///   - B.alive = 0 (removed from simulation)
+    ///   - A inherits super-linear cohesion: cohesion *= mass^exponent
+    /// </summary>
+    void MergeParticles()
+    {
+        if (!enableMerging) return;
+        if (Time.frameCount % mergeInterval != 0) return;
+
+        float baseMergeDist = particleSpacing * 1.2f; // Slightly larger than spacing
+        float mergeVelSqr = mergeVelocityThreshold * mergeVelocityThreshold;
+        int merged = 0;
+
+        for (int i = 0; i < ParticleCount; i++)
+        {
+            if (particles[i].alive < 0.5f) continue;
+            if (sleepState[i] == 1) continue; // Only merge awake particles
+            if (particleMasses[i] >= maxMergeSize) continue; // Already at max size
+            if (math.lengthsq(particles[i].velocity) > mergeVelSqr) continue;
+
+            float2 posI = particles[i].position;
+            int typeI = particles[i].typeIndex;
+            float radiusI = math.sqrt(particleMasses[i]);
+            int2 cell = CellCoord(posI);
+
+            // Find best merge candidate: same type, closest, also slow
+            int bestJ = -1;
+            float bestDistSqr = float.MaxValue;
+
+            for (int dx2 = -1; dx2 <= 1; dx2++)
+            for (int dy2 = -1; dy2 <= 1; dy2++)
+            {
+                int2 nc = cell + new int2(dx2, dy2);
+                if (nc.x < 0 || nc.x >= hashGridW || nc.y < 0 || nc.y >= hashGridH) continue;
+
+                int ci = nc.y * hashGridW + nc.x;
+                int start = cellOffsets[ci];
+                int count = cellCounts[ci];
+
+                for (int s = 0; s < count; s++)
+                {
+                    int j = sortedIndices[start + s];
+                    if (j <= i) continue; // Avoid double-merge
+                    if (particles[j].alive < 0.5f) continue;
+                    if (sleepState[j] == 1) continue;
+                    if (particles[j].typeIndex != typeI) continue;
+                    if (math.lengthsq(particles[j].velocity) > mergeVelSqr) continue;
+
+                    // Check if combined mass would exceed limit
+                    if (particleMasses[i] + particleMasses[j] > maxMergeSize) continue;
+
+                    // Merge distance scales with both particle sizes
+                    // Two mass-1: baseDist * 1. Mass-4 + mass-1: baseDist * 1.5
+                    float radiusJ = math.sqrt(particleMasses[j]);
+                    float pairMergeDist = baseMergeDist * (radiusI + radiusJ) * 0.5f;
+
+                    float dSqr = math.lengthsq(posI - particles[j].position);
+                    if (dSqr < pairMergeDist * pairMergeDist && dSqr < bestDistSqr)
+                    {
+                        bestDistSqr = dSqr;
+                        bestJ = j;
+                    }
+                }
+            }
+
+            if (bestJ < 0) continue;
+
+            // Merge: A absorbs B
+            float massA = particleMasses[i];
+            float massB = particleMasses[bestJ];
+            float totalMass = massA + massB;
+
+            // Weighted center of mass
+            var pI = particles[i];
+            var pB = particles[bestJ];
+            float2 newPos = (pI.position * massA + pB.position * massB) / totalMass;
+            float2 newVel = (pI.velocity * massA + pB.velocity * massB) / totalMass;
+
+            pI.position = newPos;
+            pI.velocity = newVel;
+            particles[i] = pI;
+            particleMasses[i] = totalMass;
+
+            // Kill absorbed particle
+            pB.alive = 0f;
+            pB.position = new float2(-9999, -9999);
+            pB.velocity = float2.zero;
+            particles[bestJ] = pB;
+
+            merged++;
+        }
+
+        if (merged > 0)
+            Debug.Log($"[FluidSimJobs] Merged {merged} particle pairs");
+    }
+
     void DisposeNative()
     {
         if (particles.IsCreated) particles.Dispose();
@@ -848,6 +1023,7 @@ public class FluidSimulationJobs : MonoBehaviour
         if (densities.IsCreated) densities.Dispose();
         if (pressures.IsCreated) pressures.Dispose();
         if (collisionCorrections.IsCreated) collisionCorrections.Dispose();
+        if (particleMasses.IsCreated) particleMasses.Dispose();
         if (sleepState.IsCreated) sleepState.Dispose();
         if (sleepCounter.IsCreated) sleepCounter.Dispose();
         if (cellCounts.IsCreated) cellCounts.Dispose();
@@ -946,20 +1122,20 @@ public class FluidSimulationJobs : MonoBehaviour
         [ReadOnly] public NativeArray<int> sortedIndices;
         [ReadOnly] public NativeArray<int> cellCounts;
         [ReadOnly] public NativeArray<int> cellOffsets;
+        [ReadOnly] public NativeArray<float> particleMasses;
         [NativeDisableParallelForRestriction] public NativeArray<float> densities;
         [NativeDisableParallelForRestriction] public NativeArray<float> pressures;
 
         public float cellSize, smoothingRadiusSqr;
         public float2 containerMin;
         public int gridW, gridH;
-        public float particleMass, restDensity, pressureStiffness, poly6Coeff;
+        public float restDensity, pressureStiffness, poly6Coeff;
 
         public void Execute(int i)
         {
-            // SKIP sleeping particles — they don't need updated density
             if (sleepState[i] == 1 || particles[i].alive < 0.5f)
             {
-                densities[i] = restDensity; // Stable placeholder
+                densities[i] = restDensity;
                 pressures[i] = 0f;
                 return;
             }
@@ -981,7 +1157,6 @@ public class FluidSimulationJobs : MonoBehaviour
                 int start = cellOffsets[ci];
                 int count = cellCounts[ci];
 
-                // Reads ALL neighbors (sleeping + awake) so density is correct
                 for (int s = 0; s < count; s++)
                 {
                     int j = sortedIndices[start + s];
@@ -989,7 +1164,8 @@ public class FluidSimulationJobs : MonoBehaviour
                     if (rSqr < smoothingRadiusSqr)
                     {
                         float diff = smoothingRadiusSqr - rSqr;
-                        density += particleMass * poly6Coeff * diff * diff * diff;
+                        // Use per-particle mass: merged particles contribute more to density
+                        density += particleMasses[j] * poly6Coeff * diff * diff * diff;
                     }
                 }
             }
@@ -1014,6 +1190,7 @@ public class FluidSimulationJobs : MonoBehaviour
         [ReadOnly] public NativeArray<float> pressures;
         [NativeDisableParallelForRestriction] public NativeArray<float2> forces;
         [ReadOnly] public NativeArray<FluidTypeGPU> fluidTypeData;
+        [ReadOnly] public NativeArray<float> particleMasses;
 
         public float cellSize, smoothingRadius, smoothingRadiusSqr, particleMass;
         public float2 containerMin;
@@ -1022,6 +1199,7 @@ public class FluidSimulationJobs : MonoBehaviour
         public float cohesionStrength;
         public float interTypeRepulsion;
         public float surfaceTensionStrength;
+        public float cohesionMassExponent;
         public bool uniformFluid;
         public float spikyGradCoeff, viscLaplCoeff;
 
@@ -1096,10 +1274,16 @@ public class FluidSimulationJobs : MonoBehaviour
                     if (sameType)
                     {
                         float t = r / smoothingRadius;
-                        cF = -dir * typeI.cohesion * cohesionStrength * t * (1f - t) * (1f - t);
+                        // Super-linear mass scaling, capped to prevent instability
+                        // mass=1→1, mass=4→8, mass=10→31, mass=50→cap at maxCohesionScale
+                        float massScale = math.min(
+                            math.pow(particleMasses[j], cohesionMassExponent),
+                            20f // Cap: even mass-50 won't exceed 20× cohesion
+                        );
+                        cF = -dir * typeI.cohesion * cohesionStrength * massScale * t * (1f - t) * (1f - t);
 
                         // Track center of mass for surface tension
-                        float w = 1f - t;
+                        float w = (1f - t) * math.min(particleMasses[j], 10f);
                         sameTypeCOM += pJ.position * w;
                         sameTypeWeight += w;
                     }
@@ -1157,6 +1341,7 @@ public class FluidSimulationJobs : MonoBehaviour
         [ReadOnly] public NativeArray<int> sleepState;
         [ReadOnly] public NativeArray<float2> forces;
         [ReadOnly] public NativeArray<float> densities;
+        [ReadOnly] public NativeArray<float> particleMasses;
         [ReadOnly] public NativeArray<FluidTypeGPU> fluidTypeData;
 
         public float2 gravity, containerMin, containerMax;
@@ -1169,14 +1354,23 @@ public class FluidSimulationJobs : MonoBehaviour
         public void Execute(int i)
         {
             var p = particles[i];
-            if (p.alive < 0.5f || sleepState[i] == 1) return; // Skip dead and sleeping
+            if (p.alive < 0.5f || sleepState[i] == 1) return;
 
             var ft = fluidTypeData[p.typeIndex];
             float gScale = uniformFluid ? 1f : ft.gravityScale;
             float density = math.max(densities[i], 0.001f);
-            float2 accel = forces[i] / density + gravity * gScale;
+            float mass = particleMasses[i];
+
+            // F = ma → a = F/m. Heavier particles accelerate slower (more inertia).
+            // SPH forces are already density-relative, so divide by mass on top.
+            float2 accel = forces[i] / (density * mass) + gravity * gScale;
 
             p.velocity += accel * dt;
+
+            // Extra damping for heavy particles — they should be sluggish, not jittery
+            // mass=1 → no extra damping, mass=50 → significant extra damping
+            float massDamping = 1f / (1f + (mass - 1f) * 0.03f);
+            p.velocity *= massDamping;
 
             // Flask suction
             if (flaskActive)
@@ -1237,8 +1431,9 @@ public class FluidSimulationJobs : MonoBehaviour
         [ReadOnly] public NativeArray<int> sortedIndices;
         [ReadOnly] public NativeArray<int> cellCounts;
         [ReadOnly] public NativeArray<int> cellOffsets;
+        [ReadOnly] public NativeArray<float> particleMasses;
         [NativeDisableParallelForRestriction]
-        public NativeArray<float2> collisionCorrections; // Output: per-particle push
+        public NativeArray<float2> collisionCorrections;
         public float cellSize;
         public float2 containerMin;
         public int gridW, gridH;
@@ -1254,7 +1449,10 @@ public class FluidSimulationJobs : MonoBehaviour
             }
 
             float2 posI = particles[i].position;
-            float minDistSqr = minDistance * minDistance;
+            // Softer radius scaling: pow(0.35) instead of sqrt(0.5).
+            // mass=1 → 1.0, mass=4 → 1.6, mass=10 → 2.2, mass=50 → 3.7
+            float radiusI = math.pow(particleMasses[i], 0.35f);
+
             int2 cellI = math.clamp(
                 (int2)math.floor((posI - containerMin) / cellSize),
                 int2.zero, new int2(gridW - 1, gridH - 1));
@@ -1278,13 +1476,17 @@ public class FluidSimulationJobs : MonoBehaviour
                     if (j == i) continue;
                     if (particles[j].alive < 0.5f) continue;
 
+                    // Collision distance scales with pow(mass, 0.35) — softer than sqrt
+                    float radiusJ = math.pow(particleMasses[j], 0.35f);
+                    float pairMinDist = minDistance * (radiusI + radiusJ) * 0.5f;
+
                     float2 diff = posI - particles[j].position;
                     float distSqr = math.lengthsq(diff);
 
-                    if (distSqr < minDistSqr && distSqr > 1e-12f)
+                    if (distSqr < pairMinDist * pairMinDist && distSqr > 1e-12f)
                     {
                         float dist = math.sqrt(distSqr);
-                        float overlap = minDistance - dist;
+                        float overlap = pairMinDist - dist;
                         float2 dir = diff / dist;
                         totalPush += dir * overlap * pushStrength;
                         pushCount++;

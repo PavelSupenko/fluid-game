@@ -62,7 +62,9 @@ Shader "FluidSim/ParticleCircleGPU"
                 Particle p = _Particles[instanceID];
 
                 // Collapse dead particles to zero size
-                float scale = (p.alive > 0.5) ? _RenderScale : 0.0;
+                // Scale by pow(mass, 0.35) for merged particles
+                float massScale = (p.density > 0.01) ? pow(p.density, 0.35) : 1.0;
+                float scale = (p.alive > 0.5) ? _RenderScale * massScale : 0.0;
                 float3 worldPos = float3(p.position, 0.0) + v.vertex.xyz * scale;
 
                 o.pos = mul(UNITY_MATRIX_VP, float4(worldPos, 1.0));
