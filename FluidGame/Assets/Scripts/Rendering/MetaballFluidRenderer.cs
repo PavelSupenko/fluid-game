@@ -47,6 +47,10 @@ public class MetaballFluidRenderer : MonoBehaviour
     [Range(0.1f, 2f)]
     public float bridgeEdgeSoftness = 0.5f;
 
+    [Tooltip("Width of bridges relative to particle size. Higher = thicker connections, fewer gaps.")]
+    [Range(1f, 5f)]
+    public float bridgeWidthMultiplier = 2.5f;
+
     [Tooltip("How often to rebuild bridges (every N frames). 1 = every frame.")]
     [Range(1, 10)]
     public int bridgeRebuildInterval = 2;
@@ -273,8 +277,8 @@ public class MetaballFluidRenderer : MonoBehaviour
                         {
                             posA = posI,
                             posB = posJ,
-                            radiusA = radiusI * 2f,
-                            radiusB = radiusJ * 2f,
+                            radiusA = radiusI * bridgeWidthMultiplier,
+                            radiusB = radiusJ * bridgeWidthMultiplier,
                             color = particles[i].color
                         });
 

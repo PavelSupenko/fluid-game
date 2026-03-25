@@ -274,10 +274,11 @@ MonoBehaviour:
   blobSharpness: 8
   resolutionScale: 0.85
   enableBridges: 1
-  bridgeRadiusMultiplier: 2.5
-  bridgeAlpha: 0.85
-  bridgeEdgeSoftness: 0.4
-  bridgeRebuildInterval: 7
+  bridgeRadiusMultiplier: 1.5
+  bridgeAlpha: 0.9
+  bridgeEdgeSoftness: 1.5
+  bridgeWidthMultiplier: 2.5
+  bridgeRebuildInterval: 5
   solidColors: 1
   showDebugRT: 0
 --- !u!1 &619394800
@@ -512,11 +513,11 @@ MonoBehaviour:
   collisionRadiusFactor: 1.2
   collisionPushStrength: 1
   enableMerging: 1
-  maxMergeSize: 10
+  maxMergeSize: 50
   mergeInterval: 20
   mergeVelocityThreshold: 1.12
   cohesionMassExponent: 1.5
-  gravity: {x: 0, y: -4.5}
+  gravity: {x: 0, y: -9}
   boundaryDamping: 0.3
   velocityDamping: 0.98
   timeScale: 1
