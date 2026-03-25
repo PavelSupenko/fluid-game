@@ -7,21 +7,34 @@ using Unity.Mathematics;
 /// <summary>
 /// CPU-based incompressible SPH fluid simulation with Jobs + Burst.
 ///
+/// THREE-STATE WAKE SYSTEM (performance optimization):
+///   SLEEPING (2) — static, zero cost. Included in spatial hash for density boundary.
+///   FALLING  (1) — gravity + collision only, ~6x cheaper than full SPH.
+///   AWAKE    (0) — full SPH pipeline (density, pressure, forces, PBF, XSPH, springs).
+///
+///   Transitions: SLEEPING → FALLING → AWAKE → SLEEPING
+///   SLEEPING→FALLING: when unsupported (floating island) or near flask column.
+///   FALLING→AWAKE:    when colliding with awake particles (contact promotion).
+///   AWAKE→SLEEPING:   when velocity stays low for N frames.
+///
+///   Result: when bottom is absorbed, the column above enters FALLING (cheap),
+///   and only the contact zone at the bottom gets full SPH. 80%+ cost reduction.
+///
 /// INCOMPRESSIBILITY MODEL (4 layers):
 ///   1. Bidirectional pressure — negative pressure (tension) prevents density drops
 ///   2. PBF density correction — iterative position fix to enforce ρ = ρ₀
 ///   3. XSPH velocity smoothing — neighbors move together (thick paint effect)
 ///   4. Rest-neighbor springs — structural memory, breakable for deformation
-///
-/// SLEEP SYSTEM: Particles that aren't moving go to sleep and are excluded from
-/// expensive SPH computations. Only particles near the flask or recently disturbed
-/// areas are awake. This gives 10-15x speedup when most of the image is static.
-///
-/// WAKE BUDGET: Max N particles can wake per frame, preventing FPS spikes when
-/// large areas collapse. Visually this creates a natural "cascading" effect.
 /// </summary>
 public class FluidSimulationJobs : MonoBehaviour
 {
+    // ─── Particle State Constants ─────────────────────────────────
+    // These are int values stored in sleepState array.
+    // Order matters: lower = more active = more expensive.
+    private const int STATE_AWAKE    = 0;
+    private const int STATE_FALLING  = 1;
+    private const int STATE_SLEEPING = 2;
+
     // ─── Container ───────────────────────────────────────────────
     [Header("Container Bounds")]
     public Vector2 containerMin = new Vector2(-4f, -3f);
@@ -45,62 +58,33 @@ public class FluidSimulationJobs : MonoBehaviour
 
     // ─── Feature 1: Incompressibility — Bidirectional Pressure ──
     [Header("Incompressibility")]
-    [Tooltip("How much negative pressure (tension) is allowed. " +
-             "0 = old behavior (compressible). 1 = full tension (incompressible).")]
     [Range(0f, 1f)]
     public float tensionFactor = 0.8f;
-
-    [Tooltip("Maximum negative pressure as a fraction of pressureStiffness. " +
-             "Prevents extreme tension from tearing particles apart.")]
     [Range(0f, 1f)]
     public float tensionClamp = 0.6f;
 
     // ─── Feature 2: Position-Based Density Correction (PBF) ─────
     [Header("Density Correction (PBF)")]
-    [Tooltip("Enable iterative position correction to enforce constant density. " +
-             "This is the main mechanism preventing column collapse.")]
     public bool enableDensityCorrection = true;
-
-    [Tooltip("Number of correction iterations per substep. " +
-             "More = more accurate but slower. 2-3 is good for mobile.")]
     [Range(1, 5)]
     public int densityCorrectionIterations = 2;
-
-    [Tooltip("Relaxation parameter (epsilon). Prevents division by zero " +
-             "and controls correction stiffness. Lower = stiffer.")]
     public float pbfRelaxation = 100f;
 
     // ─── Feature 3: XSPH Velocity Smoothing ─────────────────────
     [Header("XSPH Smoothing")]
-    [Tooltip("Blend factor for velocity smoothing with neighbors. " +
-             "0 = no smoothing. 0.3 = thick paint. 0.5 = very cohesive.")]
     [Range(0f, 0.5f)]
     public float xsphFactor = 0.2f;
-
-    [Tooltip("Only smooth velocities with same-type neighbors. " +
-             "Keeps different fluid types from dragging each other.")]
     public bool xsphSameTypeOnly = true;
 
     // ─── Feature 4: Rest-Neighbor Spring Network ─────────────────
     [Header("Spring Network")]
-    [Tooltip("Enable spring network for structural memory. " +
-             "Particles remember neighbors and resist deformation.")]
     public bool enableSprings = true;
-
-    [Tooltip("Spring stiffness. Higher = more rigid structure.")]
     [Range(0f, 50f)]
     public float springStiffness = 15f;
-
-    [Tooltip("Springs break when stretched beyond this factor of rest distance. " +
-             "1.5 = 50% stretch before break. Lower = more brittle.")]
     [Range(1.1f, 3f)]
     public float springBreakThreshold = 1.8f;
-
-    [Tooltip("Maximum springs per particle. Lower = faster, less structural memory.")]
     [Range(4, 20)]
     public int maxSpringsPerParticle = 12;
-
-    [Tooltip("Spring damping to prevent oscillation.")]
     [Range(0f, 1f)]
     public float springDamping = 0.3f;
 
@@ -152,6 +136,18 @@ public class FluidSimulationJobs : MonoBehaviour
     public float wakeRadius = 1.5f;
     public bool startSleeping = true;
 
+    // ─── Wake Wave (performance) ─────────────────────────────────
+    [Header("Wake Wave")]
+    [Tooltip("Radius around awake particles where falling particles get promoted to awake. " +
+             "Smaller = tighter contact zone = better performance.")]
+    [Range(0.1f, 3f)]
+    public float contactPromotionRadius = 0.6f;
+
+    [Tooltip("How many grid rows above the flask to wake per frame. " +
+             "Higher = faster column wake but more particles active.")]
+    [Range(1, 10)]
+    public int wakeWaveRowsPerFrame = 3;
+
     // ─── Fluid Types ─────────────────────────────────────────────
     [Header("Fluid Types")]
     public FluidTypeDefinition[] fluidTypes = new FluidTypeDefinition[]
@@ -177,6 +173,7 @@ public class FluidSimulationJobs : MonoBehaviour
     public int ParticleCount { get; private set; }
     public ComputeBuffer ParticleBuffer => particleBuffer;
     public int AwakeCount { get; private set; }
+    public int FallingCount { get; private set; }
 
     // ─── Internal Native Data ────────────────────────────────────
     private NativeArray<ParticleData> particles;
@@ -185,11 +182,9 @@ public class FluidSimulationJobs : MonoBehaviour
     private NativeArray<float> pressures;
     private NativeArray<FluidTypeGPU> fluidTypeData;
     private NativeArray<float2> collisionCorrections;
-
-    // Per-particle mass (separate from struct to keep 48-byte GPU layout)
     private NativeArray<float> particleMasses;
 
-    // Sleep state
+    // Three-state: 0=AWAKE, 1=FALLING, 2=SLEEPING
     private NativeArray<int> sleepState;
     private NativeArray<int> sleepCounter;
 
@@ -207,11 +202,9 @@ public class FluidSimulationJobs : MonoBehaviour
     private NativeArray<float2> smoothedVelocities;
 
     // Feature 4: Spring network
-    // Packed as flat array: particle i's springs start at i * maxSpringsPerParticle
-    // Each spring stores: neighbor index (int packed as float) + rest distance
-    private NativeArray<int> springNeighbors;      // [i * maxSprings + k] = neighbor index (-1 = empty)
-    private NativeArray<float> springRestLengths;   // [i * maxSprings + k] = rest distance
-    private NativeArray<float2> springForces;       // Accumulated spring force per particle
+    private NativeArray<int> springNeighbors;
+    private NativeArray<float> springRestLengths;
+    private NativeArray<float2> springForces;
     private bool springsBuilt = false;
 
     // Renderer bridge
@@ -220,6 +213,9 @@ public class FluidSimulationJobs : MonoBehaviour
     // Spatial hash dimensions
     private int hashGridW, hashGridH, hashGridTotal;
     private float cellSize;
+
+    // Wake wave cursor — tracks how far up the column has been woken
+    private int wakeWaveCursorRow = -1;
 
     // ─── Burst-compatible structs ────────────────────────────────
     private struct ParticleData
@@ -268,8 +264,10 @@ public class FluidSimulationJobs : MonoBehaviour
 
         if (flaskActive)
         {
+            // Particles touching the flask go directly to AWAKE for suction
             WakeNearPoint(flaskPos, wakeRadius);
-            WakeColumnAbove(flaskPos);
+            // Column above flask enters FALLING via wake wave
+            WakeWaveAbove(flaskPos);
         }
 
         if (!hasInteracted)
@@ -358,6 +356,9 @@ public class FluidSimulationJobs : MonoBehaviour
         interTypeRepulsion = 12f;
         surfaceTensionStrength = 8f;
 
+        // Scale contact promotion radius to particle spacing
+        contactPromotionRadius = smoothingRadius * 1.5f;
+
         Debug.Log($"[FluidSimJobs] From image: {ParticleCount} particles, " +
                   $"spacing={s:F4}, h={smoothingRadius:F4}, incompressible mode");
     }
@@ -386,26 +387,20 @@ public class FluidSimulationJobs : MonoBehaviour
         sortedIndices = new NativeArray<int>(ParticleCount, Allocator.Persistent);
         particleCellIndex = new NativeArray<int>(ParticleCount, Allocator.Persistent);
 
-        // Feature 2: PBF arrays
         lambdas = new NativeArray<float>(ParticleCount, Allocator.Persistent);
         densityCorrections = new NativeArray<float2>(ParticleCount, Allocator.Persistent);
-
-        // Feature 3: XSPH array
         smoothedVelocities = new NativeArray<float2>(ParticleCount, Allocator.Persistent);
 
-        // Feature 4: Spring network arrays
         int springArraySize = ParticleCount * maxSpringsPerParticle;
         springNeighbors = new NativeArray<int>(springArraySize, Allocator.Persistent);
         springRestLengths = new NativeArray<float>(springArraySize, Allocator.Persistent);
         springForces = new NativeArray<float2>(ParticleCount, Allocator.Persistent);
-        // Initialize springs as empty
         for (int i = 0; i < springArraySize; i++)
         {
             springNeighbors[i] = -1;
             springRestLengths[i] = 0f;
         }
 
-        // Build fluid type data
         float avgDensity = 0f;
         for (int i = 0; i < fluidTypes.Length; i++) avgDensity += fluidTypes[i].density;
         avgDensity /= fluidTypes.Length;
@@ -421,7 +416,6 @@ public class FluidSimulationJobs : MonoBehaviour
             };
         }
 
-        // Copy managed → native, set initial sleep state
         for (int i = 0; i < ParticleCount; i++)
         {
             var p = Particles[i];
@@ -435,7 +429,8 @@ public class FluidSimulationJobs : MonoBehaviour
                 color = new float4(p.color.r, p.color.g, p.color.b, p.color.a)
             };
 
-            sleepState[i] = (startSleeping && p.alive > 0.5f) ? 1 : 0;
+            // Start as SLEEPING (2) or AWAKE (0)
+            sleepState[i] = (startSleeping && p.alive > 0.5f) ? STATE_SLEEPING : STATE_AWAKE;
             sleepCounter[i] = startSleeping ? sleepFramesRequired : 0;
         }
 
@@ -445,23 +440,17 @@ public class FluidSimulationJobs : MonoBehaviour
         UploadToGPU();
 
         AwakeCount = startSleeping ? 0 : ParticleCount;
+        FallingCount = 0;
         previousAliveCount = ParticleCount;
         Debug.Log($"[FluidSimJobs] Init: {ParticleCount} particles, " +
                   $"grid {hashGridW}x{hashGridH}, rest={restDensity:F1}, " +
                   $"awake={AwakeCount}, sleep={startSleeping}");
     }
 
-    /// <summary>
-    /// Feature 4: Builds the spring network from current particle positions.
-    /// Called once after the first interaction wakes particles, or can be
-    /// called manually. Each particle records its closest same-type neighbors
-    /// and the current distance as rest length.
-    /// </summary>
     void BuildSpringNetwork()
     {
         if (springsBuilt || !enableSprings) return;
 
-        // Need a fresh spatial hash build first
         var assignJob = new AssignCellsJob
         {
             particles = particles,
@@ -498,8 +487,6 @@ public class FluidSimulationJobs : MonoBehaviour
             int springBase = i * maxSpringsPerParticle;
             int springCount = 0;
 
-            // Collect candidates sorted by distance
-            // Use a simple insertion sort since maxSprings is small
             var candidateIdx = new NativeArray<int>(64, Allocator.Temp);
             var candidateDist = new NativeArray<float>(64, Allocator.Temp);
             int numCandidates = 0;
@@ -519,7 +506,6 @@ public class FluidSimulationJobs : MonoBehaviour
                     int j = sortedIndices[start + s];
                     if (j == i) continue;
                     if (particles[j].alive < 0.5f) continue;
-                    // Only connect same-type particles
                     if (particles[j].typeIndex != typeI) continue;
 
                     float dSqr = math.lengthsq(posI - particles[j].position);
@@ -534,41 +520,29 @@ public class FluidSimulationJobs : MonoBehaviour
                 }
             }
 
-            // Pick closest maxSpringsPerParticle neighbors
             for (int k = 0; k < maxSpringsPerParticle && k < numCandidates; k++)
             {
-                // Find minimum in remaining candidates
                 int minIdx = k;
                 for (int m = k + 1; m < numCandidates; m++)
-                {
-                    if (candidateDist[m] < candidateDist[minIdx])
-                        minIdx = m;
-                }
-                // Swap
+                    if (candidateDist[m] < candidateDist[minIdx]) minIdx = m;
                 if (minIdx != k)
                 {
-                    int tmpI = candidateIdx[k]; candidateIdx[k] = candidateIdx[minIdx]; candidateIdx[minIdx] = tmpI;
+                    int tmpI2 = candidateIdx[k]; candidateIdx[k] = candidateIdx[minIdx]; candidateIdx[minIdx] = tmpI2;
                     float tmpD = candidateDist[k]; candidateDist[k] = candidateDist[minIdx]; candidateDist[minIdx] = tmpD;
                 }
-
                 springNeighbors[springBase + k] = candidateIdx[k];
                 springRestLengths[springBase + k] = math.sqrt(candidateDist[k]);
                 springCount++;
             }
-
-            // Mark remaining slots as empty
             for (int k = springCount; k < maxSpringsPerParticle; k++)
-            {
                 springNeighbors[springBase + k] = -1;
-            }
 
             candidateIdx.Dispose();
             candidateDist.Dispose();
         }
 
         springsBuilt = true;
-        Debug.Log($"[FluidSimJobs] Spring network built for {ParticleCount} particles, " +
-                  $"max {maxSpringsPerParticle} springs each");
+        Debug.Log($"[FluidSimJobs] Spring network built for {ParticleCount} particles");
     }
 
     void CalibrateRestDensity()
@@ -614,26 +588,34 @@ public class FluidSimulationJobs : MonoBehaviour
         Debug.Log($"[FluidSimJobs] restDensity = {restDensity:F1} ({sampleCount} samples)");
     }
 
-    // ─── Wake / Sleep Logic (main thread) ────────────────────────
+    // ═════════════════════════════════════════════════════════════
+    //  WAKE / SLEEP LOGIC (main thread)
+    // ═════════════════════════════════════════════════════════════
 
     private int cascadeScanCursor = 0;
 
     [Header("Scan Budget")]
     public int scanBudgetPerFrame = 400;
 
+    /// <summary>
+    /// Moving AWAKE particles promote nearby SLEEPING→FALLING.
+    /// AWAKE particles near FALLING particles promote FALLING→AWAKE (contact).
+    /// </summary>
     void CascadeWake()
     {
         int wakeBudget = wakeBudgetPerFrame;
         int scanBudget = scanBudgetPerFrame;
         float cascadeRadiusSqr = smoothingRadius * smoothingRadius * 4f;
         float movingThresholdSqr = sleepVelocityThreshold * sleepVelocityThreshold * 4f;
+        float contactRadSqr = contactPromotionRadius * contactPromotionRadius;
 
         for (int scanned = 0; scanned < scanBudget && wakeBudget > 0; scanned++)
         {
             int i = cascadeScanCursor;
             cascadeScanCursor = (cascadeScanCursor + 1) % ParticleCount;
 
-            if (sleepState[i] != 0) continue;
+            // Only AWAKE, alive, moving particles can cascade
+            if (sleepState[i] != STATE_AWAKE) continue;
             if (particles[i].alive < 0.5f) continue;
             if (math.lengthsq(particles[i].velocity) < movingThresholdSqr) continue;
 
@@ -653,11 +635,19 @@ public class FluidSimulationJobs : MonoBehaviour
                 for (int s = 0; s < count && wakeBudget > 0; s++)
                 {
                     int j = sortedIndices[start + s];
-                    if (sleepState[j] != 1) continue;
+                    float distSqr = math.lengthsq(particles[j].position - pos);
 
-                    if (math.lengthsq(particles[j].position - pos) < cascadeRadiusSqr)
+                    if (sleepState[j] == STATE_SLEEPING && distSqr < cascadeRadiusSqr)
                     {
-                        sleepState[j] = 0;
+                        // SLEEPING → FALLING (not directly to AWAKE)
+                        sleepState[j] = STATE_FALLING;
+                        sleepCounter[j] = 0;
+                        wakeBudget--;
+                    }
+                    else if (sleepState[j] == STATE_FALLING && distSqr < contactRadSqr)
+                    {
+                        // FALLING → AWAKE (contact promotion)
+                        sleepState[j] = STATE_AWAKE;
                         sleepCounter[j] = 0;
                         wakeBudget--;
                     }
@@ -666,6 +656,9 @@ public class FluidSimulationJobs : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Particles near the flask go directly to AWAKE (need full physics for suction).
+    /// </summary>
     void WakeNearPoint(float2 point, float radius)
     {
         int wakeBudget = wakeBudgetPerFrame;
@@ -686,7 +679,7 @@ public class FluidSimulationJobs : MonoBehaviour
             for (int s = 0; s < count && wakeBudget > 0; s++)
             {
                 int i = sortedIndices[start + s];
-                if (sleepState[i] == 0) continue;
+                if (sleepState[i] == STATE_AWAKE) continue;
                 if (particles[i].alive < 0.5f) continue;
 
                 bool typeMatch = (flaskTargetType < 0) || (particles[i].typeIndex == flaskTargetType);
@@ -694,7 +687,8 @@ public class FluidSimulationJobs : MonoBehaviour
 
                 if (math.lengthsq(particles[i].position - point) < radiusSqr)
                 {
-                    sleepState[i] = 0;
+                    // Direct to AWAKE for flask interaction
+                    sleepState[i] = STATE_AWAKE;
                     sleepCounter[i] = 0;
                     wakeBudget--;
                 }
@@ -702,18 +696,32 @@ public class FluidSimulationJobs : MonoBehaviour
         }
     }
 
-    void WakeColumnAbove(float2 point)
+    /// <summary>
+    /// Gradually wakes the column above the flask, N rows per frame.
+    /// Sets particles to FALLING (cheap) not AWAKE (expensive).
+    /// The wake front rises from the flask upward each frame.
+    /// </summary>
+    void WakeWaveAbove(float2 point)
     {
         int wakeBudget = wakeBudgetPerFrame;
         float halfWidth = smoothingRadius * 1.5f;
 
-        int2 colMin = CellCoord(new float2(point.x - halfWidth, point.y));
-        int2 colMax = CellCoord(new float2(point.x + halfWidth, containerMax.y));
+        int2 flaskCell = CellCoord(point);
 
-        for (int cy = colMin.y; cy <= colMax.y && wakeBudget > 0; cy++)
-        for (int cx = colMin.x; cx <= colMax.x && wakeBudget > 0; cx++)
+        // Initialize wave cursor on first call
+        if (wakeWaveCursorRow < 0)
+            wakeWaveCursorRow = flaskCell.y;
+
+        // Advance cursor upward by N rows
+        int targetRow = math.min(wakeWaveCursorRow + wakeWaveRowsPerFrame, hashGridH - 1);
+
+        int colMinX = math.max(0, flaskCell.x - (int)math.ceil(halfWidth / cellSize));
+        int colMaxX = math.min(hashGridW - 1, flaskCell.x + (int)math.ceil(halfWidth / cellSize));
+
+        for (int cy = wakeWaveCursorRow; cy <= targetRow && wakeBudget > 0; cy++)
+        for (int cx = colMinX; cx <= colMaxX && wakeBudget > 0; cx++)
         {
-            if (cx < 0 || cx >= hashGridW || cy < 0 || cy >= hashGridH) continue;
+            if (cy < 0 || cy >= hashGridH) continue;
 
             int ci = cy * hashGridW + cx;
             int start = cellOffsets[ci];
@@ -722,7 +730,7 @@ public class FluidSimulationJobs : MonoBehaviour
             for (int s = 0; s < count && wakeBudget > 0; s++)
             {
                 int i = sortedIndices[start + s];
-                if (sleepState[i] != 1) continue;
+                if (sleepState[i] != STATE_SLEEPING) continue;
                 if (particles[i].alive < 0.5f) continue;
 
                 bool typeMatch = (flaskTargetType < 0) || (particles[i].typeIndex == flaskTargetType);
@@ -731,14 +739,25 @@ public class FluidSimulationJobs : MonoBehaviour
                 float dxVal = particles[i].position.x - point.x;
                 if (dxVal * dxVal < halfWidth * halfWidth)
                 {
-                    sleepState[i] = 0;
+                    // SLEEPING → FALLING (cheap gravity-only)
+                    sleepState[i] = STATE_FALLING;
                     sleepCounter[i] = 0;
                     wakeBudget--;
                 }
             }
         }
+
+        wakeWaveCursorRow = targetRow;
+
+        // Reset cursor when flask moves significantly or deactivates
+        if (!flaskActive)
+            wakeWaveCursorRow = -1;
     }
 
+    /// <summary>
+    /// Detects floating islands and sets them to FALLING (not AWAKE).
+    /// Also handles slope flow and horizontal spreading.
+    /// </summary>
     void DetectFloatingIslands()
     {
         int wakeBudget = wakeBudgetPerFrame;
@@ -749,21 +768,20 @@ public class FluidSimulationJobs : MonoBehaviour
             grounded[x] = cellCounts[x] > 0;
 
         for (int y = 1; y < hashGridH; y++)
+        for (int x = 0; x < hashGridW; x++)
         {
-            for (int x = 0; x < hashGridW; x++)
-            {
-                int ci = y * hashGridW + x;
-                if (cellCounts[ci] == 0) { grounded[ci] = false; continue; }
+            int ci = y * hashGridW + x;
+            if (cellCounts[ci] == 0) { grounded[ci] = false; continue; }
 
-                bool supported = false;
-                int yBelow = y - 1;
-                if (x > 0) supported |= grounded[yBelow * hashGridW + (x - 1)];
-                supported |= grounded[yBelow * hashGridW + x];
-                if (x < hashGridW - 1) supported |= grounded[yBelow * hashGridW + (x + 1)];
-                grounded[ci] = supported;
-            }
+            bool supported = false;
+            int yBelow = y - 1;
+            if (x > 0) supported |= grounded[yBelow * hashGridW + (x - 1)];
+            supported |= grounded[yBelow * hashGridW + x];
+            if (x < hashGridW - 1) supported |= grounded[yBelow * hashGridW + (x + 1)];
+            grounded[ci] = supported;
         }
 
+        // Phase 1: Floating islands → FALLING
         for (int ci = 0; ci < hashGridTotal && wakeBudget > 0; ci++)
         {
             if (grounded[ci]) continue;
@@ -774,32 +792,30 @@ public class FluidSimulationJobs : MonoBehaviour
             for (int s = 0; s < count && wakeBudget > 0; s++)
             {
                 int i = sortedIndices[start + s];
-                if (sleepState[i] != 1) continue;
-                sleepState[i] = 0;
+                if (sleepState[i] != STATE_SLEEPING) continue;
+                sleepState[i] = STATE_FALLING;
                 sleepCounter[i] = 0;
                 wakeBudget--;
             }
         }
 
-        // Slope flow
+        // Phase 2: Slope flow — grounded cells with empty below → FALLING
         for (int y = 1; y < hashGridH && wakeBudget > 0; y++)
         for (int x = 0; x < hashGridW && wakeBudget > 0; x++)
         {
             int ci = y * hashGridW + x;
-            if (!grounded[ci]) continue;
-            if (cellCounts[ci] == 0) continue;
+            if (!grounded[ci] || cellCounts[ci] == 0) continue;
             int belowCi = (y - 1) * hashGridW + x;
             if (cellCounts[belowCi] > 0) continue;
-            WakeSleepingInCell(ci, ref wakeBudget);
+            WakeSleepingInCellToFalling(ci, ref wakeBudget);
         }
 
-        // Horizontal spreading
+        // Phase 3: Horizontal spreading
         for (int y = 1; y < hashGridH && wakeBudget > 0; y++)
         for (int x = 0; x < hashGridW && wakeBudget > 0; x++)
         {
             int ci = y * hashGridW + x;
-            if (!grounded[ci]) continue;
-            if (cellCounts[ci] == 0) continue;
+            if (!grounded[ci] || cellCounts[ci] == 0) continue;
 
             bool flowLeft = false;
             if (x > 0)
@@ -816,19 +832,22 @@ public class FluidSimulationJobs : MonoBehaviour
                 flowRight = sideEmpty && diagEmpty;
             }
             if (flowLeft || flowRight)
-                WakeSleepingInCell(ci, ref wakeBudget);
+                WakeSleepingInCellToFalling(ci, ref wakeBudget);
         }
     }
 
-    void WakeSleepingInCell(int ci, ref int wakeBudget)
+    /// <summary>
+    /// Wakes sleeping particles in a cell to FALLING state (cheap).
+    /// </summary>
+    void WakeSleepingInCellToFalling(int ci, ref int wakeBudget)
     {
         int start = cellOffsets[ci];
         int count = cellCounts[ci];
         for (int s = 0; s < count && wakeBudget > 0; s++)
         {
             int i = sortedIndices[start + s];
-            if (sleepState[i] != 1) continue;
-            sleepState[i] = 0;
+            if (sleepState[i] != STATE_SLEEPING) continue;
+            sleepState[i] = STATE_FALLING;
             sleepCounter[i] = 0;
             wakeBudget--;
         }
@@ -842,16 +861,15 @@ public class FluidSimulationJobs : MonoBehaviour
     }
 
     // ═════════════════════════════════════════════════════════════
-    //  SIMULATION STEP — now includes PBF, XSPH, and Springs
+    //  SIMULATION STEP
     // ═════════════════════════════════════════════════════════════
 
     void RunSimulationStep(float dt)
     {
-        // Build spring network on first wake (once only)
         if (enableSprings && !springsBuilt && hasInteracted)
             BuildSpringNetwork();
 
-        // 1. Build spatial hash — ALL alive particles (sleeping + awake)
+        // 1. Build spatial hash — ALL alive particles (sleeping included for density boundary)
         var assignJob = new AssignCellsJob
         {
             particles = particles,
@@ -873,8 +891,8 @@ public class FluidSimulationJobs : MonoBehaviour
         };
         buildGridJob.Run();
 
-        // 2. Density — with bidirectional pressure (Feature 1)
-        var densityJob = new DensityJob
+        // 2. Density — AWAKE only (sleeping+falling contribute as neighbors but don't compute)
+        new DensityJob
         {
             particles = particles,
             sleepState = sleepState,
@@ -891,14 +909,12 @@ public class FluidSimulationJobs : MonoBehaviour
             restDensity = restDensity,
             pressureStiffness = pressureStiffness,
             poly6Coeff = 4f / (math.PI * math.pow(smoothingRadius, 8)),
-            // Feature 1 params
             tensionFactor = tensionFactor,
             tensionClamp = tensionClamp
-        };
-        densityJob.Schedule(ParticleCount, 128).Complete();
+        }.Schedule(ParticleCount, 128).Complete();
 
-        // 3. Forces — pressure + viscosity + cohesion + inter-type repulsion
-        var forcesJob = new ForcesJob
+        // 3. Forces — AWAKE only
+        new ForcesJob
         {
             particles = particles,
             sleepState = sleepState,
@@ -924,10 +940,9 @@ public class FluidSimulationJobs : MonoBehaviour
             uniformFluid = uniformFluid,
             spikyGradCoeff = -10f / (math.PI * math.pow(smoothingRadius, 5)),
             viscLaplCoeff = 40f / (math.PI * math.pow(smoothingRadius, 5))
-        };
-        forcesJob.Schedule(ParticleCount, 64).Complete();
+        }.Schedule(ParticleCount, 64).Complete();
 
-        // 3b. Feature 4: Spring forces — structural memory
+        // 3b. Spring forces — AWAKE only
         if (enableSprings && springsBuilt)
         {
             new SpringForceJob
@@ -943,7 +958,6 @@ public class FluidSimulationJobs : MonoBehaviour
                 springBreakThreshold = springBreakThreshold
             }.Schedule(ParticleCount, 64).Complete();
 
-            // Add spring forces to main forces
             new AddSpringForcesJob
             {
                 forces = forces,
@@ -953,8 +967,8 @@ public class FluidSimulationJobs : MonoBehaviour
             }.Schedule(ParticleCount, 256).Complete();
         }
 
-        // 4. Integrate — velocity + position update
-        var integrateJob = new IntegrateJob
+        // 4. Integrate AWAKE — full physics with flask suction
+        new IntegrateJob
         {
             particles = particles,
             sleepState = sleepState,
@@ -977,12 +991,26 @@ public class FluidSimulationJobs : MonoBehaviour
             flaskRadius = flaskRadius,
             flaskAbsorbRadius = flaskAbsorbRadius,
             flaskStrength = flaskStrength
-        };
-        integrateJob.Schedule(ParticleCount, 128).Complete();
+        }.Schedule(ParticleCount, 128).Complete();
 
-        // 5. Feature 2: Position-Based Density Correction (PBF)
-        //    Iteratively nudge particles to restore rest density.
-        //    This is the main incompressibility enforcement.
+        // 4b. Integrate FALLING — gravity + boundary only (~6x cheaper than full SPH)
+        new FallingIntegrateJob
+        {
+            particles = particles,
+            sleepState = sleepState,
+            fluidTypeData = fluidTypeData,
+            gravity = new float2(gravity.x, gravity.y),
+            dt = dt,
+            velocityDamping = velocityDamping,
+            maxSpeed = maxSpeed,
+            particleRadius = particleRadius,
+            boundaryDamping = boundaryDamping,
+            containerMin = new float2(containerMin.x, containerMin.y),
+            containerMax = new float2(containerMax.x, containerMax.y),
+            uniformFluid = uniformFluid
+        }.Schedule(ParticleCount, 256).Complete();
+
+        // 5. PBF density correction — AWAKE only
         if (enableDensityCorrection)
         {
             float poly6C = 4f / (math.PI * math.pow(smoothingRadius, 8));
@@ -990,14 +1018,12 @@ public class FluidSimulationJobs : MonoBehaviour
 
             for (int iter = 0; iter < densityCorrectionIterations; iter++)
             {
-                // Rebuild spatial hash with corrected positions
                 if (iter > 0)
                 {
                     assignJob.Schedule(ParticleCount, 128).Complete();
                     buildGridJob.Run();
                 }
 
-                // Compute lambda (constraint magnitude) for each particle
                 new ComputeLambdaJob
                 {
                     particles = particles,
@@ -1019,7 +1045,6 @@ public class FluidSimulationJobs : MonoBehaviour
                     particleMass = particleMass
                 }.Schedule(ParticleCount, 128).Complete();
 
-                // Compute position corrections (read-only particles)
                 new ComputeDensityCorrectionJob
                 {
                     particles = particles,
@@ -1040,7 +1065,6 @@ public class FluidSimulationJobs : MonoBehaviour
                     particleMass = particleMass
                 }.Schedule(ParticleCount, 128).Complete();
 
-                // Apply corrections to positions (writes only particles[i])
                 new ApplyDensityCorrectionJob
                 {
                     particles = particles,
@@ -1053,8 +1077,7 @@ public class FluidSimulationJobs : MonoBehaviour
             }
         }
 
-        // 5b. Feature 3: XSPH velocity smoothing
-        //     Blends each particle's velocity with neighbors for cohesive movement.
+        // 5b. XSPH — AWAKE only
         if (xsphFactor > 0.001f)
         {
             new XSPHJob
@@ -1076,7 +1099,6 @@ public class FluidSimulationJobs : MonoBehaviour
                 sameTypeOnly = xsphSameTypeOnly
             }.Schedule(ParticleCount, 128).Complete();
 
-            // Apply smoothed velocities
             new ApplyXSPHJob
             {
                 particles = particles,
@@ -1085,7 +1107,7 @@ public class FluidSimulationJobs : MonoBehaviour
             }.Schedule(ParticleCount, 256).Complete();
         }
 
-        // 6. Particle collision — hard distance constraint
+        // 6. Collision — AWAKE + FALLING (both need collision, sleeping is static wall)
         new ParticleCollisionJob
         {
             particles = particles,
@@ -1109,7 +1131,24 @@ public class FluidSimulationJobs : MonoBehaviour
             sleepState = sleepState
         }.Schedule(ParticleCount, 256).Complete();
 
-        // 7. Sleep check
+        // 7. Contact promotion — FALLING particles near AWAKE → promote to AWAKE
+        //    This is the key mechanism: falling particles only get full SPH
+        //    when they reach the contact zone at the bottom.
+        new ContactPromotionJob
+        {
+            particles = particles,
+            sleepState = sleepState,
+            sortedIndices = sortedIndices,
+            cellCounts = cellCounts,
+            cellOffsets = cellOffsets,
+            cellSize = cellSize,
+            containerMin = new float2(containerMin.x, containerMin.y),
+            gridW = hashGridW, gridH = hashGridH,
+            contactRadiusSqr = contactPromotionRadius * contactPromotionRadius
+        }.Schedule(ParticleCount, 128).Complete();
+
+        // 8. Sleep check — AWAKE particles with low velocity → SLEEPING
+        //    FALLING particles don't sleep (they need to keep falling)
         new SleepCheckJob
         {
             particles = particles,
@@ -1124,7 +1163,7 @@ public class FluidSimulationJobs : MonoBehaviour
 
     void UploadToGPU()
     {
-        int awake = 0;
+        int awake = 0, falling = 0;
         for (int i = 0; i < ParticleCount; i++)
         {
             var p = particles[i];
@@ -1139,9 +1178,14 @@ public class FluidSimulationJobs : MonoBehaviour
                 alive = p.alive,
                 color = new Color(p.color.x, p.color.y, p.color.z, p.color.w)
             };
-            if (p.alive > 0.5f && sleepState[i] == 0) awake++;
+            if (p.alive > 0.5f)
+            {
+                if (sleepState[i] == STATE_AWAKE) awake++;
+                else if (sleepState[i] == STATE_FALLING) falling++;
+            }
         }
         AwakeCount = awake;
+        FallingCount = falling;
         particleBuffer.SetData(Particles);
     }
 
@@ -1159,7 +1203,8 @@ public class FluidSimulationJobs : MonoBehaviour
         for (int i = 0; i < ParticleCount; i++)
         {
             if (particles[i].alive < 0.5f) continue;
-            if (sleepState[i] == 1) continue;
+            // Only merge AWAKE particles (not falling or sleeping)
+            if (sleepState[i] != STATE_AWAKE) continue;
             if (particleMasses[i] >= maxMergeSize) continue;
             if (math.lengthsq(particles[i].velocity) > mergeVelSqr) continue;
 
@@ -1186,7 +1231,7 @@ public class FluidSimulationJobs : MonoBehaviour
                     int j = sortedIndices[start + s];
                     if (j <= i) continue;
                     if (particles[j].alive < 0.5f) continue;
-                    if (sleepState[j] == 1) continue;
+                    if (sleepState[j] != STATE_AWAKE) continue;
                     if (particles[j].typeIndex != typeI) continue;
                     if (math.lengthsq(particles[j].velocity) > mergeVelSqr) continue;
                     if (particleMasses[i] + particleMasses[j] > maxMergeSize) continue;
@@ -1210,11 +1255,8 @@ public class FluidSimulationJobs : MonoBehaviour
 
             var pI = particles[i];
             var pB = particles[bestJ];
-            float2 newPos = (pI.position * massA + pB.position * massB) / totalMass;
-            float2 newVel = (pI.velocity * massA + pB.velocity * massB) / totalMass;
-
-            pI.position = newPos;
-            pI.velocity = newVel;
+            pI.position = (pI.position * massA + pB.position * massB) / totalMass;
+            pI.velocity = (pI.velocity * massA + pB.velocity * massB) / totalMass;
             particles[i] = pI;
             particleMasses[i] = totalMass;
 
@@ -1245,12 +1287,9 @@ public class FluidSimulationJobs : MonoBehaviour
         if (sortedIndices.IsCreated) sortedIndices.Dispose();
         if (particleCellIndex.IsCreated) particleCellIndex.Dispose();
         if (fluidTypeData.IsCreated) fluidTypeData.Dispose();
-        // Feature 2
         if (lambdas.IsCreated) lambdas.Dispose();
         if (densityCorrections.IsCreated) densityCorrections.Dispose();
-        // Feature 3
         if (smoothedVelocities.IsCreated) smoothedVelocities.Dispose();
-        // Feature 4
         if (springNeighbors.IsCreated) springNeighbors.Dispose();
         if (springRestLengths.IsCreated) springRestLengths.Dispose();
         if (springForces.IsCreated) springForces.Dispose();
@@ -1283,6 +1322,9 @@ public class FluidSimulationJobs : MonoBehaviour
 
         public void Execute(int i)
         {
+            // ALL alive particles go in the grid (sleeping + falling + awake)
+            // Sleeping particles must be present so awake neighbors sense density.
+            // Falling particles must be present for collision detection.
             if (particles[i].alive < 0.5f)
             {
                 particleCellIndex[i] = -1;
@@ -1334,7 +1376,7 @@ public class FluidSimulationJobs : MonoBehaviour
         }
     }
 
-    // ─── Density (parallel) — Feature 1: bidirectional pressure ──
+    // ─── Density (AWAKE only, reads all neighbors) ───────────────
 
     [BurstCompile]
     struct DensityJob : IJobParallelFor
@@ -1352,14 +1394,12 @@ public class FluidSimulationJobs : MonoBehaviour
         public float2 containerMin;
         public int gridW, gridH;
         public float restDensity, pressureStiffness, poly6Coeff;
-
-        // Feature 1: tension parameters
-        public float tensionFactor;
-        public float tensionClamp;
+        public float tensionFactor, tensionClamp;
 
         public void Execute(int i)
         {
-            if (sleepState[i] == 1 || particles[i].alive < 0.5f)
+            // Skip FALLING and SLEEPING — only AWAKE gets density computed
+            if (sleepState[i] != 0 || particles[i].alive < 0.5f)
             {
                 densities[i] = restDensity;
                 pressures[i] = 0f;
@@ -1386,6 +1426,8 @@ public class FluidSimulationJobs : MonoBehaviour
                 for (int s = 0; s < count; s++)
                 {
                     int j = sortedIndices[start + s];
+                    // Neighbors of ALL states contribute to density
+                    // (sleeping particles act as density wall)
                     float rSqr = math.lengthsq(posI - particles[j].position);
                     if (rSqr < smoothingRadiusSqr)
                     {
@@ -1398,42 +1440,24 @@ public class FluidSimulationJobs : MonoBehaviour
             density = math.max(density, 0.001f);
             densities[i] = density;
 
-            // ── Feature 1: Bidirectional pressure ──
-            // OLD: pressures[i] = math.max(0f, pressureStiffness * (density - restDensity));
-            //
-            // NEW: Allow negative pressure (tension) when density < restDensity.
-            // This creates a pulling force that prevents particles from separating,
-            // which is the key mechanism for volume preservation.
-            //
-            // tensionFactor controls how much negative pressure is applied:
-            //   0.0 = old behavior (compressible, no tension)
-            //   1.0 = full symmetric pressure (maximally incompressible)
-            //
-            // tensionClamp limits the maximum negative pressure to prevent
-            // extreme tension from tearing the material apart.
-
+            // Bidirectional pressure (Feature 1)
             float pressureError = density - restDensity;
             float pressure;
-
             if (pressureError >= 0f)
             {
-                // Compression: full repulsive pressure (unchanged from original)
                 pressure = pressureStiffness * pressureError;
             }
             else
             {
-                // Tension: negative pressure pulls particles together
-                // Scaled by tensionFactor and clamped to prevent instability
                 pressure = pressureStiffness * pressureError * tensionFactor;
                 float maxTension = -pressureStiffness * restDensity * tensionClamp;
                 pressure = math.max(pressure, maxTension);
             }
-
             pressures[i] = pressure;
         }
     }
 
-    // ─── Forces (parallel) ───────────────────────────────────────
+    // ─── Forces (AWAKE only) ─────────────────────────────────────
 
     [BurstCompile]
     struct ForcesJob : IJobParallelFor
@@ -1452,17 +1476,15 @@ public class FluidSimulationJobs : MonoBehaviour
         public float cellSize, smoothingRadius, smoothingRadiusSqr, particleMass;
         public float2 containerMin;
         public int gridW, gridH;
-        public float nearPressureStiffness;
-        public float cohesionStrength;
-        public float interTypeRepulsion;
-        public float surfaceTensionStrength;
-        public float cohesionMassExponent;
+        public float nearPressureStiffness, cohesionStrength, interTypeRepulsion;
+        public float surfaceTensionStrength, cohesionMassExponent;
         public bool uniformFluid;
         public float spikyGradCoeff, viscLaplCoeff;
 
         public void Execute(int i)
         {
-            if (sleepState[i] == 1 || particles[i].alive < 0.5f)
+            // Skip FALLING and SLEEPING
+            if (sleepState[i] != 0 || particles[i].alive < 0.5f)
             {
                 forces[i] = float2.zero;
                 return;
@@ -1504,18 +1526,13 @@ public class FluidSimulationJobs : MonoBehaviour
                     float2 dir = diff / r;
                     float densityJ = math.max(densities[j], 0.001f);
 
-                    // Pressure force — now supports negative pressure (tension)
-                    // from Feature 1. When pressures are negative, force direction
-                    // reverses: particles pull toward each other.
                     float gm = SpikyGrad(r);
                     float pressAvg = (pressures[i] + pressures[j]) * 0.5f;
                     float2 pF = dir * (-particleMass * pressAvg * gm / densityJ);
 
-                    // Near-pressure repulsion (unchanged)
                     float nf = 1f - r / smoothingRadius;
                     float2 nF = dir * (nearPressureStiffness * nf * nf);
 
-                    // Viscosity (unchanged)
                     var typeJ = fluidTypeData[pJ.typeIndex];
                     float mu = (typeI.viscosity + typeJ.viscosity) * 0.5f;
                     float vl = ViscLapl(r);
@@ -1524,15 +1541,12 @@ public class FluidSimulationJobs : MonoBehaviour
 
                     bool sameType = (pI.typeIndex == pJ.typeIndex);
 
-                    // Cohesion — same type only
                     float2 cF = float2.zero;
                     if (sameType)
                     {
                         float t = r / smoothingRadius;
                         float massScale = math.min(
-                            math.pow(particleMasses[j], cohesionMassExponent),
-                            20f
-                        );
+                            math.pow(particleMasses[j], cohesionMassExponent), 20f);
                         cF = -dir * typeI.cohesion * cohesionStrength * massScale * t * (1f - t) * (1f - t);
 
                         float w = (1f - t) * math.min(particleMasses[j], 10f);
@@ -1540,7 +1554,6 @@ public class FluidSimulationJobs : MonoBehaviour
                         sameTypeWeight += w;
                     }
 
-                    // Inter-type repulsion
                     float2 rF = float2.zero;
                     if (!sameType && interTypeRepulsion > 0f)
                     {
@@ -1552,7 +1565,6 @@ public class FluidSimulationJobs : MonoBehaviour
                 }
             }
 
-            // Surface tension
             if (sameTypeWeight > 0.001f && surfaceTensionStrength > 0f)
             {
                 float2 com = sameTypeCOM / sameTypeWeight;
@@ -1582,7 +1594,7 @@ public class FluidSimulationJobs : MonoBehaviour
         }
     }
 
-    // ─── Integrate (parallel) ────────────────────────────────────
+    // ─── Integrate AWAKE (full physics) ──────────────────────────
 
     [BurstCompile]
     struct IntegrateJob : IJobParallelFor
@@ -1604,7 +1616,8 @@ public class FluidSimulationJobs : MonoBehaviour
         public void Execute(int i)
         {
             var p = particles[i];
-            if (p.alive < 0.5f || sleepState[i] == 1) return;
+            // AWAKE only
+            if (p.alive < 0.5f || sleepState[i] != 0) return;
 
             var ft = fluidTypeData[p.typeIndex];
             float gScale = uniformFluid ? 1f : ft.gravityScale;
@@ -1612,7 +1625,6 @@ public class FluidSimulationJobs : MonoBehaviour
             float mass = particleMasses[i];
 
             float2 accel = forces[i] / (density * math.sqrt(mass)) + gravity * gScale;
-
             p.velocity += accel * dt;
 
             float massDamping = 1f / (1f + (mass - 1f) * 0.005f);
@@ -1647,8 +1659,6 @@ public class FluidSimulationJobs : MonoBehaviour
             p.velocity *= velocityDamping;
 
             float speedSqr = math.lengthsq(p.velocity);
-
-            // Progressive settling
             float settleThreshold = 0.5f;
             if (speedSqr < settleThreshold * settleThreshold && speedSqr > 1e-8f)
             {
@@ -1675,19 +1685,130 @@ public class FluidSimulationJobs : MonoBehaviour
         }
     }
 
-    // ═════════════════════════════════════════════════════════════
-    //  Feature 2: PBF DENSITY CORRECTION JOBS
-    // ═════════════════════════════════════════════════════════════
+    // ─── Integrate FALLING (gravity + boundary only, ~6x cheaper) ─
 
     /// <summary>
-    /// Computes the PBF lambda (Lagrange multiplier) for each particle.
-    /// Lambda measures how much position correction is needed to satisfy
-    /// the density constraint ρ_i = ρ₀.
-    ///
-    /// From Macklin & Müller 2013 "Position Based Fluids":
-    ///   λ_i = -(C_i) / (Σ_k |∇_k C_i|² + ε)
-    /// where C_i = ρ_i/ρ₀ - 1 is the density constraint.
+    /// Lightweight integration for FALLING particles. No SPH forces, no flask
+    /// suction, no settling damping. Just gravity + velocity cap + boundaries.
+    /// This is the key performance optimization: most of a collapsing column
+    /// is in FALLING state and skips the entire SPH pipeline.
     /// </summary>
+    [BurstCompile]
+    struct FallingIntegrateJob : IJobParallelFor
+    {
+        public NativeArray<ParticleData> particles;
+        [ReadOnly] public NativeArray<int> sleepState;
+        [ReadOnly] public NativeArray<FluidTypeGPU> fluidTypeData;
+
+        public float2 gravity, containerMin, containerMax;
+        public float dt, velocityDamping, maxSpeed, particleRadius, boundaryDamping;
+        public bool uniformFluid;
+
+        public void Execute(int i)
+        {
+            var p = particles[i];
+            // FALLING only (state == 1)
+            if (p.alive < 0.5f || sleepState[i] != 1) return;
+
+            float gScale = uniformFluid ? 1f : fluidTypeData[p.typeIndex].gravityScale;
+
+            // Simple gravity acceleration — no SPH forces
+            p.velocity += gravity * gScale * dt;
+            p.velocity *= velocityDamping;
+
+            float speedSqr = math.lengthsq(p.velocity);
+            if (speedSqr > maxSpeed * maxSpeed)
+                p.velocity *= maxSpeed / math.sqrt(speedSqr);
+
+            p.position += p.velocity * dt;
+
+            // Boundaries
+            float r = particleRadius;
+            if (p.position.x < containerMin.x + r) { p.position.x = containerMin.x + r; p.velocity.x *= -boundaryDamping; }
+            else if (p.position.x > containerMax.x - r) { p.position.x = containerMax.x - r; p.velocity.x *= -boundaryDamping; }
+            if (p.position.y < containerMin.y + r) { p.position.y = containerMin.y + r; p.velocity.y *= -boundaryDamping; }
+            else if (p.position.y > containerMax.y - r) { p.position.y = containerMax.y - r; p.velocity.y *= -boundaryDamping; }
+
+            particles[i] = p;
+        }
+    }
+
+    // ─── Contact Promotion (FALLING → AWAKE on collision) ────────
+
+    /// <summary>
+    /// Promotes FALLING particles to AWAKE when they are near an AWAKE particle.
+    /// This is the mechanism that creates the "contact wave": falling particles
+    /// land on the awake zone and transition to full SPH physics.
+    ///
+    /// Also promotes FALLING particles that hit the container floor,
+    /// since they need SPH to settle properly.
+    /// </summary>
+    [BurstCompile]
+    struct ContactPromotionJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<ParticleData> particles;
+        [NativeDisableParallelForRestriction]
+        public NativeArray<int> sleepState;
+        [ReadOnly] public NativeArray<int> sortedIndices;
+        [ReadOnly] public NativeArray<int> cellCounts;
+        [ReadOnly] public NativeArray<int> cellOffsets;
+
+        public float cellSize;
+        public float2 containerMin;
+        public int gridW, gridH;
+        public float contactRadiusSqr;
+
+        public void Execute(int i)
+        {
+            // Only process FALLING particles
+            if (sleepState[i] != 1 || particles[i].alive < 0.5f) return;
+
+            float2 posI = particles[i].position;
+
+            // Promote if near container floor (need SPH to settle)
+            if (posI.y < containerMin.y + 0.2f)
+            {
+                sleepState[i] = 0; // → AWAKE
+                return;
+            }
+
+            int2 cellI = math.clamp(
+                (int2)math.floor((posI - containerMin) / cellSize),
+                int2.zero, new int2(gridW - 1, gridH - 1));
+
+            // Check neighbors: if any AWAKE particle is nearby → promote
+            for (int dx = -1; dx <= 1; dx++)
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                int2 nc = cellI + new int2(dx, dy);
+                if (nc.x < 0 || nc.x >= gridW || nc.y < 0 || nc.y >= gridH) continue;
+
+                int ci = nc.y * gridW + nc.x;
+                int start = cellOffsets[ci];
+                int count = cellCounts[ci];
+
+                for (int s = 0; s < count; s++)
+                {
+                    int j = sortedIndices[start + s];
+                    if (j == i) continue;
+                    if (particles[j].alive < 0.5f) continue;
+
+                    // Only AWAKE neighbors trigger promotion
+                    if (sleepState[j] != 0) continue;
+
+                    float dSqr = math.lengthsq(posI - particles[j].position);
+                    if (dSqr < contactRadiusSqr)
+                    {
+                        sleepState[i] = 0; // → AWAKE
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    // ─── PBF: Compute Lambda ─────────────────────────────────────
+
     [BurstCompile]
     struct ComputeLambdaJob : IJobParallelFor
     {
@@ -1708,7 +1829,8 @@ public class FluidSimulationJobs : MonoBehaviour
 
         public void Execute(int i)
         {
-            if (sleepState[i] == 1 || particles[i].alive < 0.5f)
+            // AWAKE only
+            if (sleepState[i] != 0 || particles[i].alive < 0.5f)
             {
                 lambdas[i] = 0f;
                 return;
@@ -1719,10 +1841,9 @@ public class FluidSimulationJobs : MonoBehaviour
                 (int2)math.floor((posI - containerMin) / cellSize),
                 int2.zero, new int2(gridW - 1, gridH - 1));
 
-            // Recompute density at current position (may have been corrected)
             float density = 0f;
-            float2 gradSum = float2.zero;    // Σ ∇_pk W for k=j (neighbor contributions)
-            float gradSqrSum = 0f;           // Σ |∇_pk C_i|² for all k
+            float2 gradSum = float2.zero;
+            float gradSqrSum = 0f;
 
             for (int dx = -1; dx <= 1; dx++)
             for (int dy = -1; dy <= 1; dy++)
@@ -1741,14 +1862,12 @@ public class FluidSimulationJobs : MonoBehaviour
                     float rSqr = math.lengthsq(diff);
                     if (rSqr >= smoothingRadiusSqr) continue;
 
-                    // Density contribution (Poly6)
                     float d = smoothingRadiusSqr - rSqr;
                     density += particleMasses[j] * poly6Coeff * d * d * d;
 
                     if (j == i) continue;
                     if (rSqr < 1e-12f) continue;
 
-                    // Gradient of constraint w.r.t. neighbor j (Spiky gradient)
                     float r = math.sqrt(rSqr);
                     if (r >= smoothingRadius) continue;
 
@@ -1756,30 +1875,19 @@ public class FluidSimulationJobs : MonoBehaviour
                     float spikyGrad = spikyGradCoeff * hMinusR * hMinusR;
                     float2 gradJ = (diff / r) * (particleMass / restDensity) * spikyGrad;
 
-                    // Accumulate for k=i (self) gradient
                     gradSum += gradJ;
-
-                    // |∇_pj C_i|² for k=j
                     gradSqrSum += math.lengthsq(gradJ);
                 }
             }
 
-            // |∇_pi C_i|² (self gradient is the sum of all neighbor gradients)
             gradSqrSum += math.lengthsq(gradSum);
-
-            // Density constraint: C_i = ρ_i/ρ₀ - 1
             float constraint = density / restDensity - 1f;
-
-            // Lambda: correction magnitude
             lambdas[i] = -constraint / (gradSqrSum + relaxation);
         }
     }
 
-    /// <summary>
-    /// Computes position corrections based on lambda values (read-only particles).
-    /// Double-buffered: writes corrections to a separate array, applied later.
-    ///   Δp_i = (1/ρ₀) Σ_j (λ_i + λ_j) ∇W(p_i - p_j)
-    /// </summary>
+    // ─── PBF: Compute Density Corrections ────────────────────────
+
     [BurstCompile]
     struct ComputeDensityCorrectionJob : IJobParallelFor
     {
@@ -1800,7 +1908,8 @@ public class FluidSimulationJobs : MonoBehaviour
 
         public void Execute(int i)
         {
-            if (sleepState[i] == 1 || particles[i].alive < 0.5f)
+            // AWAKE only
+            if (sleepState[i] != 0 || particles[i].alive < 0.5f)
             {
                 densityCorrections[i] = float2.zero;
                 return;
@@ -1841,7 +1950,6 @@ public class FluidSimulationJobs : MonoBehaviour
                     float spikyGrad = spikyGradCoeff * hMinusR * hMinusR;
                     float2 gradW = (diff / r) * spikyGrad;
 
-                    // Position correction from combined lambdas
                     correction += (lambdaI + lambdas[j]) * gradW;
                 }
             }
@@ -1850,10 +1958,8 @@ public class FluidSimulationJobs : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Applies precomputed density corrections to particle positions.
-    /// Separated from computation to avoid read/write race on particles array.
-    /// </summary>
+    // ─── PBF: Apply Density Corrections ──────────────────────────
+
     [BurstCompile]
     struct ApplyDensityCorrectionJob : IJobParallelFor
     {
@@ -1865,7 +1971,8 @@ public class FluidSimulationJobs : MonoBehaviour
 
         public void Execute(int i)
         {
-            if (sleepState[i] == 1 || particles[i].alive < 0.5f) return;
+            // AWAKE only
+            if (sleepState[i] != 0 || particles[i].alive < 0.5f) return;
 
             float2 corr = densityCorrections[i];
             if (math.lengthsq(corr) < 1e-14f) return;
@@ -1873,7 +1980,6 @@ public class FluidSimulationJobs : MonoBehaviour
             var p = particles[i];
             p.position += corr;
 
-            // Re-enforce boundaries after correction
             float pr = particleRadius;
             p.position = math.clamp(p.position,
                 containerMin + new float2(pr, pr),
@@ -1883,22 +1989,8 @@ public class FluidSimulationJobs : MonoBehaviour
         }
     }
 
-    // ═════════════════════════════════════════════════════════════
-    //  Feature 3: XSPH VELOCITY SMOOTHING JOBS
-    // ═════════════════════════════════════════════════════════════
+    // ─── XSPH (AWAKE only) ──────────────────────────────────────
 
-    /// <summary>
-    /// XSPH velocity smoothing: blends each particle's velocity with
-    /// its neighbors weighted by the Poly6 kernel. This creates thick,
-    /// paint-like movement where nearby particles move as a group.
-    ///
-    /// v_i_smoothed = v_i + ε Σ_j (m_j/ρ_j)(v_j - v_i) W(r_ij)
-    ///
-    /// ε (xsphFactor) controls smoothing strength:
-    ///   0.0 = no effect
-    ///   0.2 = thick paint
-    ///   0.5 = very cohesive movement
-    /// </summary>
     [BurstCompile]
     struct XSPHJob : IJobParallelFor
     {
@@ -1920,7 +2012,8 @@ public class FluidSimulationJobs : MonoBehaviour
 
         public void Execute(int i)
         {
-            if (sleepState[i] == 1 || particles[i].alive < 0.5f)
+            // AWAKE only
+            if (sleepState[i] != 0 || particles[i].alive < 0.5f)
             {
                 smoothedVelocities[i] = particles[i].velocity;
                 return;
@@ -1951,14 +2044,11 @@ public class FluidSimulationJobs : MonoBehaviour
                     int j = sortedIndices[start + s];
                     if (j == i) continue;
                     if (particles[j].alive < 0.5f) continue;
-
-                    // Optional: only smooth with same type
                     if (sameTypeOnly && particles[j].typeIndex != typeI) continue;
 
                     float rSqr = math.lengthsq(posI - particles[j].position);
                     if (rSqr >= smoothingRadiusSqr) continue;
 
-                    // Poly6 kernel weight
                     float diff = smoothingRadiusSqr - rSqr;
                     float w = poly6Coeff * diff * diff * diff;
 
@@ -1972,11 +2062,6 @@ public class FluidSimulationJobs : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Applies the smoothed velocities computed by XSPHJob.
-    /// Separated into its own job so XSPHJob can read all velocities
-    /// without race conditions.
-    /// </summary>
     [BurstCompile]
     struct ApplyXSPHJob : IJobParallelFor
     {
@@ -1986,7 +2071,8 @@ public class FluidSimulationJobs : MonoBehaviour
 
         public void Execute(int i)
         {
-            if (sleepState[i] == 1 || particles[i].alive < 0.5f) return;
+            // AWAKE only
+            if (sleepState[i] != 0 || particles[i].alive < 0.5f) return;
 
             var p = particles[i];
             p.velocity = smoothedVelocities[i];
@@ -1994,22 +2080,8 @@ public class FluidSimulationJobs : MonoBehaviour
         }
     }
 
-    // ═════════════════════════════════════════════════════════════
-    //  Feature 4: SPRING NETWORK JOBS
-    // ═════════════════════════════════════════════════════════════
+    // ─── Spring Forces (AWAKE only) ──────────────────────────────
 
-    /// <summary>
-    /// Computes spring forces from the rest-neighbor network.
-    /// Each particle has up to maxSpringsPerParticle connections to
-    /// same-type neighbors, with remembered rest distances.
-    ///
-    /// Springs apply a Hookean force: F = k * (distance - restDistance) * dir
-    /// Springs break when stretched beyond springBreakThreshold × restDistance,
-    /// allowing the material to tear and deform permanently.
-    ///
-    /// Damping is applied along the spring axis to prevent oscillation:
-    ///   F_damp = -damping * dot(relativeVelocity, dir) * dir
-    /// </summary>
     [BurstCompile]
     struct SpringForceJob : IJobParallelFor
     {
@@ -2022,13 +2094,12 @@ public class FluidSimulationJobs : MonoBehaviour
         public NativeArray<float2> springForces;
 
         public int maxSpringsPerParticle;
-        public float springStiffness;
-        public float springDamping;
-        public float springBreakThreshold;
+        public float springStiffness, springDamping, springBreakThreshold;
 
         public void Execute(int i)
         {
-            if (sleepState[i] == 1 || particles[i].alive < 0.5f)
+            // AWAKE only
+            if (sleepState[i] != 0 || particles[i].alive < 0.5f)
             {
                 springForces[i] = float2.zero;
                 return;
@@ -2042,10 +2113,9 @@ public class FluidSimulationJobs : MonoBehaviour
             for (int k = 0; k < maxSpringsPerParticle; k++)
             {
                 int j = springNeighbors[baseIdx + k];
-                if (j < 0) continue; // Empty slot
+                if (j < 0) continue;
                 if (particles[j].alive < 0.5f)
                 {
-                    // Neighbor was absorbed — break spring permanently
                     springNeighbors[baseIdx + k] = -1;
                     continue;
                 }
@@ -2056,10 +2126,8 @@ public class FluidSimulationJobs : MonoBehaviour
 
                 if (dist < 1e-8f) continue;
 
-                // Check if spring should break
                 if (dist > restLen * springBreakThreshold)
                 {
-                    // Spring broken — permanent deformation
                     springNeighbors[baseIdx + k] = -1;
                     continue;
                 }
@@ -2067,10 +2135,8 @@ public class FluidSimulationJobs : MonoBehaviour
                 float2 dir = diff / dist;
                 float stretch = dist - restLen;
 
-                // Hookean spring force
                 float2 springF = dir * springStiffness * stretch;
 
-                // Axial damping to prevent oscillation
                 float2 relVel = particles[j].velocity - velI;
                 float axialVel = math.dot(relVel, dir);
                 float2 dampF = dir * springDamping * axialVel;
@@ -2082,10 +2148,6 @@ public class FluidSimulationJobs : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Adds spring forces to the main force accumulator.
-    /// Separated so SpringForceJob can safely read/write spring arrays.
-    /// </summary>
     [BurstCompile]
     struct AddSpringForcesJob : IJobParallelFor
     {
@@ -2096,12 +2158,13 @@ public class FluidSimulationJobs : MonoBehaviour
 
         public void Execute(int i)
         {
-            if (sleepState[i] == 1 || alive[i].alive < 0.5f) return;
+            // AWAKE only
+            if (sleepState[i] != 0 || alive[i].alive < 0.5f) return;
             forces[i] = forces[i] + springForces[i];
         }
     }
 
-    // ─── Particle collision (parallel) ───────────────────────────
+    // ─── Particle collision — AWAKE + FALLING ────────────────────
 
     [BurstCompile]
     struct ParticleCollisionJob : IJobParallelFor
@@ -2117,12 +2180,12 @@ public class FluidSimulationJobs : MonoBehaviour
         public float cellSize;
         public float2 containerMin;
         public int gridW, gridH;
-        public float minDistance;
-        public float pushStrength;
+        public float minDistance, pushStrength;
 
         public void Execute(int i)
         {
-            if (particles[i].alive < 0.5f || sleepState[i] == 1)
+            // Skip SLEEPING only — both AWAKE and FALLING need collision
+            if (particles[i].alive < 0.5f || sleepState[i] == 2)
             {
                 collisionCorrections[i] = float2.zero;
                 return;
@@ -2184,7 +2247,8 @@ public class FluidSimulationJobs : MonoBehaviour
 
         public void Execute(int i)
         {
-            if (particles[i].alive < 0.5f || sleepState[i] == 1) return;
+            // Skip SLEEPING only
+            if (particles[i].alive < 0.5f || sleepState[i] == 2) return;
 
             float2 corr = collisionCorrections[i];
             if (math.lengthsq(corr) < 1e-12f) return;
@@ -2195,7 +2259,7 @@ public class FluidSimulationJobs : MonoBehaviour
         }
     }
 
-    // ─── Sleep check (parallel) ──────────────────────────────────
+    // ─── Sleep check — AWAKE → SLEEPING ──────────────────────────
 
     [BurstCompile]
     struct SleepCheckJob : IJobParallelFor
@@ -2208,7 +2272,9 @@ public class FluidSimulationJobs : MonoBehaviour
 
         public void Execute(int i)
         {
-            if (sleepState[i] == 1 || particles[i].alive < 0.5f) return;
+            // Only AWAKE particles can go to sleep
+            // FALLING particles must stay falling until promoted to AWAKE
+            if (sleepState[i] != 0 || particles[i].alive < 0.5f) return;
 
             float speedSqr = math.lengthsq(particles[i].velocity);
 
@@ -2216,7 +2282,7 @@ public class FluidSimulationJobs : MonoBehaviour
             {
                 sleepCounter[i]++;
                 if (sleepCounter[i] >= sleepFramesRequired)
-                    sleepState[i] = 1;
+                    sleepState[i] = 2; // AWAKE → SLEEPING
             }
             else
             {

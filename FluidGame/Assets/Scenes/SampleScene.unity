@@ -502,21 +502,33 @@ MonoBehaviour:
   particleSpacing: 0.15
   particleRadius: 0.05
   smoothingRadius: 0.4
-  particleMass: 2.2
+  particleMass: 1
   restDensity: 777
   autoRestDensity: 1
-  pressureStiffness: 100
-  nearPressureStiffness: 15
+  pressureStiffness: 80
+  nearPressureStiffness: 5
+  tensionFactor: 0.8
+  tensionClamp: 0.6
+  enableDensityCorrection: 1
+  densityCorrectionIterations: 2
+  pbfRelaxation: 100
+  xsphFactor: 0.2
+  xsphSameTypeOnly: 1
+  enableSprings: 1
+  springStiffness: 41.3
+  springBreakThreshold: 2.324
+  maxSpringsPerParticle: 9
+  springDamping: 0.3
   cohesionStrength: 30
-  interTypeRepulsion: 15
+  interTypeRepulsion: 8
   surfaceTensionStrength: 10
   uniformFluid: 0
   collisionRadiusFactor: 2
   collisionPushStrength: 0.1
   enableMerging: 1
-  maxMergeSize: 8
-  mergeInterval: 20
-  mergeVelocityThreshold: 1.12
+  maxMergeSize: 4
+  mergeInterval: 10
+  mergeVelocityThreshold: 0.1
   cohesionMassExponent: 1.5
   gravity: {x: 0, y: -5.2}
   boundaryDamping: 0.3
@@ -529,6 +541,8 @@ MonoBehaviour:
   wakeBudgetPerFrame: 80
   wakeRadius: 1.3
   startSleeping: 1
+  contactPromotionRadius: 0.6
+  wakeWaveRowsPerFrame: 3
   fluidTypes:
   - name: Heavy (Red)
     color: {r: 0.9, g: 0.2, b: 0.15, a: 1}
