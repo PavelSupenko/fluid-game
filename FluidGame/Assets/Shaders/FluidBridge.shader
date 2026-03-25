@@ -92,10 +92,14 @@ Shader "FluidSim/FluidBridge"
 
             float4 frag(v2f i) : SV_Target
             {
-                // Soft edges on the sides of the bridge
+                // Soft edges on sides AND ends for smooth capsule-like bridges
                 float sideDistFromCenter = abs(i.uv.y - 0.5) * 2.0; // 0 at center, 1 at edge
-                float alpha = saturate(1.0 - pow(sideDistFromCenter, 2.0 / max(_EdgeSoftness, 0.01)));
-                alpha *= _BridgeAlpha;
+                float sideFade = saturate(1.0 - pow(sideDistFromCenter, 2.0 / max(_EdgeSoftness, 0.01)));
+
+                // Soft ends: fade near uv.x=0 (A end) and uv.x=1 (B end)
+                float endFade = smoothstep(0.0, 0.15, i.uv.x) * smoothstep(1.0, 0.85, i.uv.x);
+
+                float alpha = sideFade * endFade * _BridgeAlpha;
 
                 if (alpha < 0.01) discard;
 

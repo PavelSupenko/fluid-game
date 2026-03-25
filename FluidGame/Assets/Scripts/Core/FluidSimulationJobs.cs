@@ -603,15 +603,9 @@ public class FluidSimulationJobs : MonoBehaviour
             grounded[x] = cellCounts[x] > 0; // y=0 row
         }
 
-        // Left and right wall columns are also grounded (wall support).
-        // This prevents particles at container edges from being detected as floating.
-        for (int y = 0; y < hashGridH; y++)
-        {
-            int leftCi = y * hashGridW + 0;
-            int rightCi = y * hashGridW + (hashGridW - 1);
-            if (cellCounts[leftCi] > 0) grounded[leftCi] = true;
-            if (cellCounts[rightCi] > 0) grounded[rightCi] = true;
-        }
+        // NOTE: Wall columns are NOT auto-grounded. Particles at walls are only
+        // grounded if they connect to the floor via diagonal propagation.
+        // This prevents particles from climbing walls and getting stuck.
 
         // Propagate upward: cell is grounded if has particles AND
         // any of (x-1,y-1), (x,y-1), (x+1,y-1) is grounded
@@ -1403,6 +1397,20 @@ public class FluidSimulationJobs : MonoBehaviour
             p.velocity *= velocityDamping;
 
             float speedSqr = math.lengthsq(p.velocity);
+
+            // Progressive settling: when particles are slow, apply extra damping.
+            // This prevents endless micro-oscillation from cohesion/pressure balance.
+            // Fast particles (falling, being sucked) are unaffected.
+            float settleThreshold = 0.5f; // Below this speed, start extra damping
+            if (speedSqr < settleThreshold * settleThreshold && speedSqr > 1e-8f)
+            {
+                float speed = math.sqrt(speedSqr);
+                float settleFactor = speed / settleThreshold; // 0..1
+                float extraDamp = math.lerp(0.85f, 1.0f, settleFactor); // slow→0.85, fast→1.0
+                p.velocity *= extraDamp;
+                speedSqr = math.lengthsq(p.velocity);
+            }
+
             if (speedSqr > maxSpeed * maxSpeed)
                 p.velocity *= maxSpeed / math.sqrt(speedSqr);
 

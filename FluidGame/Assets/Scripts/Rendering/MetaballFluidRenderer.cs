@@ -212,7 +212,10 @@ public class MetaballFluidRenderer : MonoBehaviour
         bridgeList.Clear();
 
         float bridgeRadius = splatScale * bridgeRadiusMultiplier;
-        float cellSize = bridgeRadius;
+
+        // Cell size based on splatScale — stable when bridgeRadiusMultiplier changes.
+        // Not too small (avoids expensive wide searches) but fine enough for neighbor detection.
+        float cellSize = Mathf.Max(splatScale, 0.02f);
 
         // Build spatial hash
         bridgeGrid.Clear();
@@ -252,8 +255,8 @@ public class MetaballFluidRenderer : MonoBehaviour
             int cx = Mathf.FloorToInt(posI.x / cellSize);
             int cy = Mathf.FloorToInt(posI.y / cellSize);
 
-            // Search wider grid area for large particles
-            int searchCells = Mathf.CeilToInt(searchRadius / cellSize);
+            // Search wider grid area for large particles, capped for performance
+            int searchCells = Mathf.Min(Mathf.CeilToInt(searchRadius / cellSize), 5);
             for (int dx = -searchCells; dx <= searchCells; dx++)
             for (int dy = -searchCells; dy <= searchCells; dy++)
             {

@@ -270,14 +270,14 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   showMetaballs: 1
-  splatScale: 0.055
+  splatScale: 0.09375
   splatScaleMultiplierFromSpacing: 2
   blobSharpness: 8
   resolutionScale: 0.85
   enableBridges: 1
-  bridgeRadiusMultiplier: 1.16
-  bridgeAlpha: 0.9
-  bridgeEdgeSoftness: 0.15
+  bridgeRadiusMultiplier: 1.3
+  bridgeAlpha: 1
+  bridgeEdgeSoftness: 2
   bridgeWidthMultiplier: 1.75
   bridgeRebuildInterval: 5
   solidColors: 1
@@ -502,10 +502,10 @@ MonoBehaviour:
   particleSpacing: 0.15
   particleRadius: 0.05
   smoothingRadius: 0.4
-  particleMass: 3
+  particleMass: 2.2
   restDensity: 777
   autoRestDensity: 1
-  pressureStiffness: 200
+  pressureStiffness: 100
   nearPressureStiffness: 15
   cohesionStrength: 30
   interTypeRepulsion: 15
@@ -514,16 +514,16 @@ MonoBehaviour:
   collisionRadiusFactor: 2
   collisionPushStrength: 0.1
   enableMerging: 1
-  maxMergeSize: 150
+  maxMergeSize: 8
   mergeInterval: 20
   mergeVelocityThreshold: 1.12
   cohesionMassExponent: 1.5
-  gravity: {x: 0, y: -9}
+  gravity: {x: 0, y: -5.2}
   boundaryDamping: 0.3
   velocityDamping: 0.98
   timeScale: 1
   subSteps: 3
-  maxSpeed: 0.3
+  maxSpeed: 6
   sleepVelocityThreshold: 0.15
   sleepFramesRequired: 20
   wakeBudgetPerFrame: 80
