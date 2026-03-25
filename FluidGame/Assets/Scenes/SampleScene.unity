@@ -270,14 +270,14 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   showMetaballs: 1
-  splatScale: 0.09
+  splatScale: 0.055
   blobSharpness: 8
   resolutionScale: 0.85
   enableBridges: 1
-  bridgeRadiusMultiplier: 1.5
+  bridgeRadiusMultiplier: 2.32
   bridgeAlpha: 0.9
-  bridgeEdgeSoftness: 1.5
-  bridgeWidthMultiplier: 2.5
+  bridgeEdgeSoftness: 0.1
+  bridgeWidthMultiplier: 2.15
   bridgeRebuildInterval: 5
   solidColors: 1
   showDebugRT: 0
