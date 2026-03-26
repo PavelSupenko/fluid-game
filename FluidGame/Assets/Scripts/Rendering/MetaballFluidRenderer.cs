@@ -22,6 +22,8 @@ public class MetaballFluidRenderer : MonoBehaviour
     [Tooltip("Size of each particle circle")]
     public float splatScale = 0.09f;
 
+    public float splatScaleMultiplierFromSpacing = 1.8f;
+
     [Tooltip("Edge softness of each circle. Lower = sharper, higher = softer.")]
     [Range(1f, 8f)]
     public float blobSharpness = 2f;
@@ -122,8 +124,8 @@ public class MetaballFluidRenderer : MonoBehaviour
             simFluidTypes = sim.fluidTypes;
             simParticleSpacing = sim.particleSpacing;
 
-            if (simParticleSpacing > 0.001f)
-                splatScale = simParticleSpacing * 1.8f;
+            // if (simParticleSpacing > 0.001f)
+            //     splatScale = simParticleSpacing * splatScaleMultiplierFromSpacing;
         }
         else
         {
@@ -210,7 +212,10 @@ public class MetaballFluidRenderer : MonoBehaviour
         bridgeList.Clear();
 
         float bridgeRadius = splatScale * bridgeRadiusMultiplier;
-        float cellSize = bridgeRadius;
+
+        // Cell size based on splatScale — stable when bridgeRadiusMultiplier changes.
+        // Not too small (avoids expensive wide searches) but fine enough for neighbor detection.
+        float cellSize = Mathf.Max(splatScale, 0.02f);
 
         // Build spatial hash
         bridgeGrid.Clear();
@@ -250,8 +255,8 @@ public class MetaballFluidRenderer : MonoBehaviour
             int cx = Mathf.FloorToInt(posI.x / cellSize);
             int cy = Mathf.FloorToInt(posI.y / cellSize);
 
-            // Search wider grid area for large particles
-            int searchCells = Mathf.CeilToInt(searchRadius / cellSize);
+            // Search wider grid area for large particles, capped for performance
+            int searchCells = Mathf.Min(Mathf.CeilToInt(searchRadius / cellSize), 5);
             for (int dx = -searchCells; dx <= searchCells; dx++)
             for (int dy = -searchCells; dy <= searchCells; dy++)
             {

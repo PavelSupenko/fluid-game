@@ -270,14 +270,15 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   showMetaballs: 1
-  splatScale: 0.055
+  splatScale: 0.11
+  splatScaleMultiplierFromSpacing: 2
   blobSharpness: 8
   resolutionScale: 0.85
   enableBridges: 1
-  bridgeRadiusMultiplier: 2.32
-  bridgeAlpha: 0.9
-  bridgeEdgeSoftness: 0.1
-  bridgeWidthMultiplier: 2.15
+  bridgeRadiusMultiplier: 1.46
+  bridgeAlpha: 1
+  bridgeEdgeSoftness: 0.477
+  bridgeWidthMultiplier: 2.207
   bridgeRebuildInterval: 5
   solidColors: 1
   showDebugRT: 0
@@ -428,7 +429,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   showParticles: 0
   particleMaterial: {fileID: 2100000, guid: 7680ba8a5f9b9bf45bd4c826cfb6fa76, type: 2}
-  renderScale: 0.078
+  renderScale: 0.08
 --- !u!114 &1807844257
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -444,7 +445,7 @@ MonoBehaviour:
   sourceImage: {fileID: 2800000, guid: 28b98f084f66b47a7bd196eb7b66648f, type: 3}
   targetColorCount: 8
   minColorPercentage: 3
-  resolution: 128
+  resolution: 64
   uniformDensity: 2
   uniformViscosity: 6
   uniformCohesion: 1
@@ -496,59 +497,99 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   containerMin: {x: -3, y: -3}
   containerMax: {x: 3, y: 5}
-  gridWidth: 30
-  gridHeight: 20
-  particleSpacing: 0.15
-  particleRadius: 0.05
-  smoothingRadius: 0.4
-  particleMass: 3
-  restDensity: 777
-  autoRestDensity: 0
+  gridWidth: 40
+  gridHeight: 30
+  particleSpacing: 0.08
+  particleRadius: 0.032
+  smoothingRadius: 0.19999999
+  particleMass: 1
+  restDensity: 147.54317
+  autoRestDensity: 1
   pressureStiffness: 200
   nearPressureStiffness: 15
-  cohesionStrength: 30
-  interTypeRepulsion: 15
-  surfaceTensionStrength: 10
+  tensionFactor: 0.8
+  tensionClamp: 0.6
+  enableDensityCorrection: 1
+  densityCorrectionIterations: 2
+  pbfRelaxation: 100
+  xsphFactor: 0.2
+  xsphSameTypeOnly: 1
+  enableSprings: 1
+  springStiffness: 41.3
+  springBreakThreshold: 2.324
+  maxSpringsPerParticle: 9
+  springDamping: 0.3
+  cohesionStrength: 20
+  interTypeRepulsion: 12
+  surfaceTensionStrength: 8
   uniformFluid: 0
-  collisionRadiusFactor: 1.2
-  collisionPushStrength: 1
+  collisionRadiusFactor: 2
+  collisionPushStrength: 0.1
   enableMerging: 1
-  maxMergeSize: 50
-  mergeInterval: 20
-  mergeVelocityThreshold: 1.12
+  maxMergeSize: 9
+  mergeInterval: 10
+  mergeVelocityThreshold: 0.1
   cohesionMassExponent: 1.5
-  gravity: {x: 0, y: -9}
+  gravity: {x: 0, y: -5.7}
   boundaryDamping: 0.3
   velocityDamping: 0.98
   timeScale: 1
-  subSteps: 3
-  maxSpeed: 0.4
-  sleepVelocityThreshold: 0.15
-  sleepFramesRequired: 20
+  subSteps: 4
+  maxSpeed: 8
+  sleepVelocityThreshold: 0.4
+  sleepFramesRequired: 10
   wakeBudgetPerFrame: 70
-  wakeRadius: 1.3
+  wakeRadius: 0.5
   startSleeping: 1
+  maxWakeGenerations: 2
+  contactPromotionRadius: 0.2
+  wakeWaveRowsPerFrame: 1
   fluidTypes:
-  - name: Heavy (Red)
-    color: {r: 0.9, g: 0.2, b: 0.15, a: 1}
-    density: 3
-    viscosity: 8
-    cohesion: 1
-  - name: Medium (Green)
-    color: {r: 0.2, g: 0.85, b: 0.3, a: 1}
+  - name: Color_0
+    color: {r: 0.98086244, g: 0.725832, b: 0.8958105, a: 1}
     density: 2
-    viscosity: 5
-    cohesion: 0.8
-  - name: Light (Blue)
-    color: {r: 0.2, g: 0.4, b: 0.95, a: 1}
-    density: 1
-    viscosity: 2
-    cohesion: 0.6
+    viscosity: 6
+    cohesion: 1
+  - name: Color_1
+    color: {r: 0.9807174, g: 0.7902286, b: 0.23407385, a: 1}
+    density: 2
+    viscosity: 6
+    cohesion: 1
+  - name: Color_2
+    color: {r: 0.98645943, g: 0.82916415, b: 0.3596085, a: 1}
+    density: 2
+    viscosity: 6
+    cohesion: 1
+  - name: Color_3
+    color: {r: 0.79229844, g: 0.30346072, b: 0.26775348, a: 1}
+    density: 2
+    viscosity: 6
+    cohesion: 1
+  - name: Color_4
+    color: {r: 0.5998485, g: 0.28498375, b: 0.5102392, a: 1}
+    density: 2
+    viscosity: 6
+    cohesion: 1
+  - name: Color_5
+    color: {r: 0.99435806, g: 0.98567635, b: 0.97599185, a: 1}
+    density: 2
+    viscosity: 6
+    cohesion: 1
+  - name: Color_6
+    color: {r: 0.97822815, g: 0.91866887, b: 0.8511039, a: 1}
+    density: 2
+    viscosity: 6
+    cohesion: 1
+  - name: Color_7
+    color: {r: 0.99308485, g: 0.9695714, b: 0.9449812, a: 1}
+    density: 2
+    viscosity: 6
+    cohesion: 1
   flaskPos:
-    x: 0
-    y: 0
+    x: 28.097221
+    y: 2.5208333
   flaskActive: 0
-  flaskTargetType: -1
+  flaskTargetType: 7
   flaskRadius: 1
   flaskAbsorbRadius: 0.15
   flaskStrength: 80

@@ -1,3 +1,4 @@
+using Unity.Jobs.LowLevel.Unsafe;
 using UnityEngine;
 
 /// <summary>
@@ -76,13 +77,14 @@ public class FluidDebugOverlay : MonoBehaviour
         };
         style.normal.textColor = Color.black;
 
-        GUILayout.BeginArea(new Rect(10, 150, 350, 180));
+        GUILayout.BeginArea(new Rect(10, 150, 350, 250));
         GUILayout.Label($"Mode: {modeName}", style);
+        GUILayout.Label($"Job Workers: {JobsUtility.JobWorkerCount}", style);
         GUILayout.Label($"Particles: {particleCount}", style);
 
         // Show awake count for Jobs sim
         if (jobsSim != null && jobsSim.enabled)
-            GUILayout.Label($"Awake: {jobsSim.AwakeCount} ({(particleCount > 0 ? jobsSim.AwakeCount * 100 / particleCount : 0)}%)", style);
+            GUILayout.Label($"Awake: {jobsSim.AwakeCount} ({(particleCount > 0 ? jobsSim.AwakeCount * 100 / particleCount : 0)}%) max: {jobsSim.MaxAwakeCount}", style);
 
         GUILayout.Label($"FPS: {fps:F0}", style);
         GUILayout.Label($"Avg Density: {avgDensity:F1}", style);
