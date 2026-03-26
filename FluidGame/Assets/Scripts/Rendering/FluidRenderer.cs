@@ -1,14 +1,16 @@
 using UnityEngine;
 
 /// <summary>
-/// Renders fluid particles as colored circles using GPU instancing.
-/// Uses Graphics.DrawMeshInstanced with a MaterialPropertyBlock
-/// to pass per-instance colors efficiently.
+/// Renders particles from ComputeBuffer using DrawMeshInstancedIndirect.
+/// Works with both FluidSimulationGPU and FluidSimulationJobs.
 /// </summary>
 public class FluidRenderer : MonoBehaviour
 {
     [Header("Rendering")]
-    [Tooltip("Material using the FluidSim/ParticleCircle shader")]
+    [Tooltip("Toggle individual particle circles on/off")]
+    public bool showParticles = true;
+
+    [Tooltip("Material using the FluidSim/ParticleCircleGPU shader")]
     public Material particleMaterial;
 
     [Tooltip("World-space size of each particle quad")]
@@ -16,112 +18,70 @@ public class FluidRenderer : MonoBehaviour
 
     // ─── Internals ───────────────────────────────────────────────
 
-    private FluidSimulationJobs sim;
+    private ComputeBuffer particleBufferRef;
+    private int particleCount;
     private Mesh quadMesh;
+    private ComputeBuffer argsBuffer;
+    private Bounds renderBounds;
+    private bool argsInitialized;
 
-    // Pre-allocated arrays to avoid GC allocations every frame
-    private Matrix4x4[] batchMatrices;
-    private Vector4[] batchColors;
-    private MaterialPropertyBlock mpb;
-    private int colorPropertyId;
-
-    // DrawMeshInstanced hard limit per call
-    private const int BATCH_SIZE = 1023;
+    // Args for DrawMeshInstancedIndirect:
+    private uint[] args = new uint[5];
 
     // ─── Lifecycle ───────────────────────────────────────────────
 
     void Start()
     {
-        sim = GetComponent<FluidSimulationJobs>();
         quadMesh = CreateQuadMesh();
-
-        batchMatrices = new Matrix4x4[BATCH_SIZE];
-        batchColors = new Vector4[BATCH_SIZE];
-        mpb = new MaterialPropertyBlock();
-
-        // Cache the property ID — using _ParticleColor to avoid
-        // conflict with the built-in _Color property on materials
-        colorPropertyId = Shader.PropertyToID("_ParticleColor");
+        argsBuffer = new ComputeBuffer(1, 5 * sizeof(uint), ComputeBufferType.IndirectArguments);
+        renderBounds = new Bounds(Vector3.zero, Vector3.one * 100f);
+        argsInitialized = false;
 
         if (particleMaterial == null)
-        {
-            Debug.LogError("[FluidRenderer] No particle material assigned! " +
-                           "Create a material with the FluidSim/ParticleCircle shader.");
-        }
-
-        // Log particle type distribution for debugging
-        LogTypeDistribution();
+            Debug.LogError("[FluidRendererGPU] No particle material assigned!");
     }
 
-    void LateUpdate()
+    void Update()
     {
-        if (sim.Particles == null || particleMaterial == null) return;
+        if (!showParticles || particleMaterial == null) return;
 
-        int remaining = sim.ParticleCount;
-        int offset = 0;
-
-        while (remaining > 0)
+        // Find particle buffer from whichever sim is active
+        if (particleBufferRef == null)
         {
-            int count = Mathf.Min(remaining, BATCH_SIZE);
-            FillBatch(offset, count);
+            var jobs = FindObjectOfType<FluidSimulationJobs>();
+            if (jobs != null && jobs.enabled && jobs.ParticleBuffer != null)
+            { particleBufferRef = jobs.ParticleBuffer; particleCount = jobs.ParticleCount; }
 
-            mpb.SetVectorArray(colorPropertyId, batchColors);
-            Graphics.DrawMeshInstanced(
-                quadMesh, 0, particleMaterial,
-                batchMatrices, count, mpb
-            );
-
-            offset += count;
-            remaining -= count;
+            if (particleBufferRef == null) return;
         }
+
+        if (!argsInitialized)
+        {
+            args[0] = (uint)quadMesh.GetIndexCount(0);
+            args[1] = (uint)particleCount;
+            args[2] = 0; args[3] = 0; args[4] = 0;
+            argsBuffer.SetData(args);
+            argsInitialized = true;
+        }
+
+        // Pass the compute buffer and render scale to the material
+        particleMaterial.SetBuffer("_Particles", particleBufferRef);
+        particleMaterial.SetFloat("_RenderScale", renderScale);
+
+        // Draw all particles in one GPU call — no batching, no CPU overhead
+        Graphics.DrawMeshInstancedIndirect(
+            quadMesh, 0, particleMaterial,
+            renderBounds, argsBuffer
+        );
+    }
+
+    void OnDestroy()
+    {
+        argsBuffer?.Release();
     }
 
     // ─── Helpers ─────────────────────────────────────────────────
 
-    /// <summary>
-    /// Logs how many particles belong to each fluid type.
-    /// </summary>
-    void LogTypeDistribution()
-    {
-        if (sim.Particles == null) return;
-
-        var counts = new int[sim.fluidTypes.Length];
-        for (int i = 0; i < sim.ParticleCount; i++)
-        {
-            int t = sim.Particles[i].typeIndex;
-            if (t >= 0 && t < counts.Length) counts[t]++;
-        }
-
-        string report = "[FluidRenderer] Particle type distribution: ";
-        for (int i = 0; i < counts.Length; i++)
-        {
-            report += $"{sim.fluidTypes[i].name}={counts[i]}  ";
-        }
-        Debug.Log(report);
-    }
-
-    /// <summary>
-    /// Fills the pre-allocated batch arrays with transform matrices and colors.
-    /// </summary>
-    void FillBatch(int offset, int count)
-    {
-        for (int i = 0; i < count; i++)
-        {
-            var p = sim.Particles[offset + i];
-
-            batchMatrices[i] = Matrix4x4.TRS(
-                new Vector3(p.position.x, p.position.y, 0f),
-                Quaternion.identity,
-                Vector3.one * renderScale
-            );
-
-            batchColors[i] = p.color;
-        }
-    }
-
-    /// <summary>
-    /// Creates a simple unit quad mesh centered at origin.
-    /// </summary>
     Mesh CreateQuadMesh()
     {
         var mesh = new Mesh { name = "ParticleQuad" };
