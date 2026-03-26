@@ -1,7 +1,9 @@
+using System;
 using UnityEngine;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Burst;
+using Unity.Jobs.LowLevel.Unsafe;
 using Unity.Mathematics;
 
 /// <summary>
@@ -136,6 +138,12 @@ public class FluidSimulationJobs : MonoBehaviour
     public float wakeRadius = 1.5f;
     public bool startSleeping = true;
 
+    [Tooltip("Maximum cascade propagation hops from the disturbance source. " +
+             "Lower = tighter wake zone = better performance. " +
+             "0 = no cascade at all, only flask-direct wake.")]
+    [Range(1, 30)]
+    public int maxWakeGenerations = 8;
+
     // ─── Wake Wave (performance) ─────────────────────────────────
     [Header("Wake Wave")]
     [Tooltip("Radius around awake particles where falling particles get promoted to awake. " +
@@ -173,6 +181,7 @@ public class FluidSimulationJobs : MonoBehaviour
     public int ParticleCount { get; private set; }
     public ComputeBuffer ParticleBuffer => particleBuffer;
     public int AwakeCount { get; private set; }
+    public int MaxAwakeCount { get; private set; }
     public int FallingCount { get; private set; }
 
     // ─── Internal Native Data ────────────────────────────────────
@@ -187,6 +196,10 @@ public class FluidSimulationJobs : MonoBehaviour
     // Three-state: 0=AWAKE, 1=FALLING, 2=SLEEPING
     private NativeArray<int> sleepState;
     private NativeArray<int> sleepCounter;
+    // Wake generation: how many hops from the disturbance source.
+    // 0 = flask-direct, 1 = neighbor of flask-woken, etc.
+    // Particles with generation >= maxWakeGenerations cannot cascade further.
+    private NativeArray<int> wakeGeneration;
 
     // Spatial hash arrays
     private NativeArray<int> cellCounts;
@@ -240,8 +253,10 @@ public class FluidSimulationJobs : MonoBehaviour
 
     void Awake()
     {
+        Application.targetFrameRate = 60;
+        
         var imageSource = GetComponent<ImageToFluid>();
-        if (imageSource != null)
+        if (imageSource != null && imageSource.enabled)
             imageSource.TryParseImage();
 
         if (imageSource != null && imageSource.IsReady)
@@ -381,6 +396,7 @@ public class FluidSimulationJobs : MonoBehaviour
         for (int i = 0; i < ParticleCount; i++) particleMasses[i] = 1f;
         sleepState = new NativeArray<int>(ParticleCount, Allocator.Persistent);
         sleepCounter = new NativeArray<int>(ParticleCount, Allocator.Persistent);
+        wakeGeneration = new NativeArray<int>(ParticleCount, Allocator.Persistent);
 
         cellCounts = new NativeArray<int>(hashGridTotal, Allocator.Persistent);
         cellOffsets = new NativeArray<int>(hashGridTotal, Allocator.Persistent);
@@ -432,6 +448,7 @@ public class FluidSimulationJobs : MonoBehaviour
             // Start as SLEEPING (2) or AWAKE (0)
             sleepState[i] = (startSleeping && p.alive > 0.5f) ? STATE_SLEEPING : STATE_AWAKE;
             sleepCounter[i] = startSleeping ? sleepFramesRequired : 0;
+            wakeGeneration[i] = startSleeping ? maxWakeGenerations : 0;
         }
 
         if (autoRestDensity) CalibrateRestDensity();
@@ -600,6 +617,11 @@ public class FluidSimulationJobs : MonoBehaviour
     /// <summary>
     /// Moving AWAKE particles promote nearby SLEEPING→FALLING.
     /// AWAKE particles near FALLING particles promote FALLING→AWAKE (contact).
+    /// 
+    /// Wake generation limits how far the cascade can spread:
+    /// each hop increments generation, and particles at maxWakeGenerations
+    /// cannot propagate further. This prevents a local disturbance from
+    /// waking the entire material mass.
     /// </summary>
     void CascadeWake()
     {
@@ -619,6 +641,10 @@ public class FluidSimulationJobs : MonoBehaviour
             if (particles[i].alive < 0.5f) continue;
             if (math.lengthsq(particles[i].velocity) < movingThresholdSqr) continue;
 
+            // Generation limit: this particle cannot cascade further
+            int gen = wakeGeneration[i];
+            bool canCascade = gen < maxWakeGenerations;
+
             float2 pos = particles[i].position;
             int2 cell = CellCoord(pos);
 
@@ -637,18 +663,20 @@ public class FluidSimulationJobs : MonoBehaviour
                     int j = sortedIndices[start + s];
                     float distSqr = math.lengthsq(particles[j].position - pos);
 
-                    if (sleepState[j] == STATE_SLEEPING && distSqr < cascadeRadiusSqr)
+                    if (sleepState[j] == STATE_SLEEPING && canCascade && distSqr < cascadeRadiusSqr)
                     {
-                        // SLEEPING → FALLING (not directly to AWAKE)
+                        // SLEEPING → FALLING, inherit generation + 1
                         sleepState[j] = STATE_FALLING;
                         sleepCounter[j] = 0;
+                        wakeGeneration[j] = gen + 1;
                         wakeBudget--;
                     }
                     else if (sleepState[j] == STATE_FALLING && distSqr < contactRadSqr)
                     {
-                        // FALLING → AWAKE (contact promotion)
+                        // FALLING → AWAKE (contact promotion), inherit generation
                         sleepState[j] = STATE_AWAKE;
                         sleepCounter[j] = 0;
+                        // Keep the generation the falling particle already had
                         wakeBudget--;
                     }
                 }
@@ -687,9 +715,10 @@ public class FluidSimulationJobs : MonoBehaviour
 
                 if (math.lengthsq(particles[i].position - point) < radiusSqr)
                 {
-                    // Direct to AWAKE for flask interaction
+                    // Direct to AWAKE for flask interaction — generation 0 (source)
                     sleepState[i] = STATE_AWAKE;
                     sleepCounter[i] = 0;
+                    wakeGeneration[i] = 0;
                     wakeBudget--;
                 }
             }
@@ -739,9 +768,11 @@ public class FluidSimulationJobs : MonoBehaviour
                 float dxVal = particles[i].position.x - point.x;
                 if (dxVal * dxVal < halfWidth * halfWidth)
                 {
-                    // SLEEPING → FALLING (cheap gravity-only)
+                    // SLEEPING → FALLING via wake wave — moderate generation
+                    // (can still cascade a bit but won't spread infinitely)
                     sleepState[i] = STATE_FALLING;
                     sleepCounter[i] = 0;
+                    wakeGeneration[i] = maxWakeGenerations / 2;
                     wakeBudget--;
                 }
             }
@@ -795,6 +826,7 @@ public class FluidSimulationJobs : MonoBehaviour
                 if (sleepState[i] != STATE_SLEEPING) continue;
                 sleepState[i] = STATE_FALLING;
                 sleepCounter[i] = 0;
+                wakeGeneration[i] = maxWakeGenerations - 2;
                 wakeBudget--;
             }
         }
@@ -849,6 +881,9 @@ public class FluidSimulationJobs : MonoBehaviour
             if (sleepState[i] != STATE_SLEEPING) continue;
             sleepState[i] = STATE_FALLING;
             sleepCounter[i] = 0;
+            // Islands get high generation — they can be promoted to AWAKE
+            // on contact but won't cascade-wake distant particles
+            wakeGeneration[i] = maxWakeGenerations - 2;
             wakeBudget--;
         }
     }
@@ -1154,8 +1189,10 @@ public class FluidSimulationJobs : MonoBehaviour
             particles = particles,
             sleepState = sleepState,
             sleepCounter = sleepCounter,
+            wakeGeneration = wakeGeneration,
             sleepVelThresholdSqr = sleepVelocityThreshold * sleepVelocityThreshold,
-            sleepFramesRequired = sleepFramesRequired
+            sleepFramesRequired = sleepFramesRequired,
+            maxWakeGenerations = maxWakeGenerations
         }.Schedule(ParticleCount, 256).Complete();
     }
 
@@ -1185,6 +1222,10 @@ public class FluidSimulationJobs : MonoBehaviour
             }
         }
         AwakeCount = awake;
+        
+        if (AwakeCount > MaxAwakeCount)
+            MaxAwakeCount = AwakeCount;
+        
         FallingCount = falling;
         particleBuffer.SetData(Particles);
     }
@@ -1282,6 +1323,7 @@ public class FluidSimulationJobs : MonoBehaviour
         if (particleMasses.IsCreated) particleMasses.Dispose();
         if (sleepState.IsCreated) sleepState.Dispose();
         if (sleepCounter.IsCreated) sleepCounter.Dispose();
+        if (wakeGeneration.IsCreated) wakeGeneration.Dispose();
         if (cellCounts.IsCreated) cellCounts.Dispose();
         if (cellOffsets.IsCreated) cellOffsets.Dispose();
         if (sortedIndices.IsCreated) sortedIndices.Dispose();
@@ -2267,8 +2309,10 @@ public class FluidSimulationJobs : MonoBehaviour
         [ReadOnly] public NativeArray<ParticleData> particles;
         public NativeArray<int> sleepState;
         public NativeArray<int> sleepCounter;
+        public NativeArray<int> wakeGeneration;
         public float sleepVelThresholdSqr;
         public int sleepFramesRequired;
+        public int maxWakeGenerations;
 
         public void Execute(int i)
         {
@@ -2282,7 +2326,11 @@ public class FluidSimulationJobs : MonoBehaviour
             {
                 sleepCounter[i]++;
                 if (sleepCounter[i] >= sleepFramesRequired)
+                {
                     sleepState[i] = 2; // AWAKE → SLEEPING
+                    // Reset generation so re-wake starts fresh
+                    wakeGeneration[i] = maxWakeGenerations;
+                }
             }
             else
             {

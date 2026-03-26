@@ -270,15 +270,15 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   showMetaballs: 1
-  splatScale: 0.09375
+  splatScale: 0.09
   splatScaleMultiplierFromSpacing: 2
   blobSharpness: 8
   resolutionScale: 0.85
   enableBridges: 1
-  bridgeRadiusMultiplier: 1.3
-  bridgeAlpha: 1
-  bridgeEdgeSoftness: 2
-  bridgeWidthMultiplier: 1.75
+  bridgeRadiusMultiplier: 1.8
+  bridgeAlpha: 0.808
+  bridgeEdgeSoftness: 0.67
+  bridgeWidthMultiplier: 2.666
   bridgeRebuildInterval: 5
   solidColors: 1
   showDebugRT: 0
@@ -429,7 +429,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   showParticles: 0
   particleMaterial: {fileID: 2100000, guid: 7680ba8a5f9b9bf45bd4c826cfb6fa76, type: 2}
-  renderScale: 0.078
+  renderScale: 0.08
 --- !u!114 &1807844257
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -445,7 +445,7 @@ MonoBehaviour:
   sourceImage: {fileID: 2800000, guid: 28b98f084f66b47a7bd196eb7b66648f, type: 3}
   targetColorCount: 8
   minColorPercentage: 3
-  resolution: 128
+  resolution: 75
   uniformDensity: 2
   uniformViscosity: 6
   uniformCohesion: 1
@@ -497,10 +497,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   containerMin: {x: -3, y: -3}
   containerMax: {x: 3, y: 5}
-  gridWidth: 30
-  gridHeight: 20
-  particleSpacing: 0.15
-  particleRadius: 0.05
+  gridWidth: 40
+  gridHeight: 30
+  particleSpacing: 0.1
+  particleRadius: 0.1
   smoothingRadius: 0.4
   particleMass: 1
   restDensity: 777
@@ -526,21 +526,22 @@ MonoBehaviour:
   collisionRadiusFactor: 2
   collisionPushStrength: 0.1
   enableMerging: 1
-  maxMergeSize: 4
+  maxMergeSize: 7
   mergeInterval: 10
   mergeVelocityThreshold: 0.1
   cohesionMassExponent: 1.5
-  gravity: {x: 0, y: -5.2}
+  gravity: {x: 0, y: -5.7}
   boundaryDamping: 0.3
   velocityDamping: 0.98
   timeScale: 1
   subSteps: 3
-  maxSpeed: 6
+  maxSpeed: 8
   sleepVelocityThreshold: 0.15
   sleepFramesRequired: 20
   wakeBudgetPerFrame: 80
   wakeRadius: 1.3
   startSleeping: 1
+  maxWakeGenerations: 2
   contactPromotionRadius: 0.6
   wakeWaveRowsPerFrame: 3
   fluidTypes:

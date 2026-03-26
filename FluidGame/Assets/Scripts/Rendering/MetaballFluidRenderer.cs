@@ -124,8 +124,8 @@ public class MetaballFluidRenderer : MonoBehaviour
             simFluidTypes = sim.fluidTypes;
             simParticleSpacing = sim.particleSpacing;
 
-            if (simParticleSpacing > 0.001f)
-                splatScale = simParticleSpacing * splatScaleMultiplierFromSpacing;
+            // if (simParticleSpacing > 0.001f)
+            //     splatScale = simParticleSpacing * splatScaleMultiplierFromSpacing;
         }
         else
         {
