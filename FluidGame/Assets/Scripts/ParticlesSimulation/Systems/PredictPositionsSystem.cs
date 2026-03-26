@@ -1,8 +1,9 @@
+using ParticlesSimulation.Components;
 using Unity.Burst;
 using Unity.Entities;
 using Unity.Mathematics;
 
-namespace ParticlesSimulation
+namespace ParticlesSimulation.Systems
 {
     /// <summary>
     /// Applies gravity and integrates predicted positions from velocity (semi-implicit Euler prediction).

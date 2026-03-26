@@ -1,8 +1,9 @@
+using ParticlesSimulation.Components;
 using Unity.Entities;
 using Unity.Mathematics;
 using UnityEngine;
 
-namespace ParticlesSimulation
+namespace ParticlesSimulation.Systems
 {
     /// <summary>
     /// Keeps <see cref="SimulationConfig.deltaTime"/> aligned with the frame (clamped for stability).

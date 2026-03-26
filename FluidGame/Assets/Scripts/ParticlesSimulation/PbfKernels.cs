@@ -29,14 +29,14 @@ namespace ParticlesSimulation
         /// <summary>
         /// Normalized direction from i to j scaled by Spiky gradient magnitude (2D).
         /// </summary>
-        [BurstCompile(FloatMode = FloatMode.Fast)]
-        public static float2 SpikyGradVec(float2 delta, float h, float coefficient)
+        [BurstCompile(FloatMode = FloatMode.Fast)] 
+        public static void SpikyGradVec(in float2 delta, float h, float coefficient, out float2 result)
         {
             var r2 = math.lengthsq(delta);
             var r = math.sqrt(math.max(r2, 1e-16f));
             var mag = SpikyGradMagnitude(r, h, coefficient);
             var dir = delta * math.rcp(r);
-            return dir * mag;
+            result = dir * mag;
         }
     }
 }

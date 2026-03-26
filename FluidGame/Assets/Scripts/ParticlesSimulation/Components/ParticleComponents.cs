@@ -1,7 +1,7 @@
 using Unity.Entities;
 using Unity.Mathematics;
 
-namespace ParticlesSimulation
+namespace ParticlesSimulation.Components
 {
     /// <summary>
     /// Core kinematic state (2D simulation uses xy; z unused).

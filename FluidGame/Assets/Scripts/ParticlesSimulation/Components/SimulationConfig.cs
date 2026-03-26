@@ -1,7 +1,7 @@
 using Unity.Entities;
 using Unity.Mathematics;
 
-namespace ParticlesSimulation
+namespace ParticlesSimulation.Components
 {
     /// <summary>
     /// Global simulation parameters (singleton component on a dedicated entity).

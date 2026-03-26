@@ -1,14 +1,21 @@
+using ParticlesSimulation.Components;
+using ParticlesSimulation.Jobs;
 using Unity.Collections;
 using Unity.Entities;
+using Unity.Jobs;
 using Unity.Mathematics;
+using Unity.Rendering;
+using Unity.Transforms;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.Serialization;
 
 namespace ParticlesSimulation
 {
     /// <summary>
     /// Spawns ECS particles from <see cref="ImageToFluid"/> output (Core) or a procedural grid,
-    /// wires singleton simulation data, and initializes the shared spatial hash capacity.
+    /// wires singleton simulation data, registers Entities Graphics (<see cref="RenderMeshArray"/>,
+    /// <see cref="MaterialMeshInfo"/>, <see cref="URPMaterialPropertyBaseColor"/>), and initializes the spatial hash.
     /// </summary>
     [DefaultExecutionOrder(-500)]
     public sealed class ParticleSimulationBootstrap : MonoBehaviour
@@ -22,42 +29,78 @@ namespace ParticlesSimulation
         [Header("Fallback grid (no image)")]
         [SerializeField]
         private int _fallbackGridX = 32;
-        [FormerlySerializedAs("fallbackGridY")] [SerializeField]
+
+        [FormerlySerializedAs("fallbackGridY")]
+        [SerializeField]
         private int _fallbackGridY = 48;
-        [FormerlySerializedAs("fallbackOrigin")] [SerializeField]
+
+        [FormerlySerializedAs("fallbackOrigin")]
+        [SerializeField]
         private float2 _fallbackOrigin = new float2(-1.6f, -2.2f);
-        [FormerlySerializedAs("fallbackSpacing")] [SerializeField]
+
+        [FormerlySerializedAs("fallbackSpacing")]
+        [SerializeField]
         private float _fallbackSpacing = 0.08f;
 
         [FormerlySerializedAs("smoothingRadius")]
         [Header("Simulation tuning")]
         [SerializeField]
         private float _smoothingRadius = 0.12f;
-        [FormerlySerializedAs("meltLineY")] [SerializeField]
+
+        [FormerlySerializedAs("meltLineY")]
+        [SerializeField]
         private float _meltLineY = -1.2f;
-        [FormerlySerializedAs("gravityY")] [SerializeField]
+
+        [FormerlySerializedAs("gravityY")]
+        [SerializeField]
         private float _gravityY = -12f;
-        [FormerlySerializedAs("viscosity")] [SerializeField]
+
+        [FormerlySerializedAs("viscosity")]
+        [SerializeField]
         private float _viscosity = 0.35f;
-        [FormerlySerializedAs("stiffness")] [SerializeField]
+
+        [FormerlySerializedAs("stiffness")]
+        [SerializeField]
         private float _stiffness = 0.85f;
-        [FormerlySerializedAs("rigidShapeStiffness")] [SerializeField]
+
+        [FormerlySerializedAs("rigidShapeStiffness")]
+        [SerializeField]
         private float _rigidShapeStiffness = 0.65f;
-        [FormerlySerializedAs("solverIterations")] [SerializeField]
+
+        [FormerlySerializedAs("solverIterations")]
+        [SerializeField]
         private int _solverIterations = 2;
-        [FormerlySerializedAs("particleMass")] [SerializeField]
+
+        [FormerlySerializedAs("particleMass")]
+        [SerializeField]
         private float _particleMass = 1f;
-        [FormerlySerializedAs("restDensity")] [SerializeField]
+
+        [FormerlySerializedAs("restDensity")]
+        [SerializeField]
         private float _restDensity = 1150f;
 
         [FormerlySerializedAs("dynamicRenderer")]
-        [Header("Rendering hook")]
+        [Header("Entities Graphics (URP)")]
+        [Tooltip("URP Lit/Unlit material that uses _BaseColor (Entities Graphics compatible).")]
         [SerializeField]
-        private ParticleDynamicQuadRenderer _dynamicRenderer;
+        private Material _particleMaterial;
 
-        private EntityManager em;
+        [Tooltip("Optional; if null a centered unit quad (1×1) is created at runtime.")]
+        [SerializeField]
+        private Mesh _quadMesh;
+
+        [FormerlySerializedAs("quadHalfExtent")]
+        [SerializeField]
+        private float _quadHalfExtent = 0.035f;
+
+        [FormerlySerializedAs("renderLayer")]
+        [SerializeField]
+        private int _renderingLayer;
+
+        private EntityManager entityManager;
         private Entity singletonEntity;
         private bool spawned;
+        private Mesh _runtimeQuadMesh;
 
         private void Awake()
         {
@@ -71,26 +114,25 @@ namespace ParticlesSimulation
                 return;
             }
 
-            em = world.EntityManager;
+            entityManager = world.EntityManager;
             CreateSingletons();
             SpawnParticles();
             ParticleSimulationSpatialGrid.EnsureCapacity(
-                em.GetComponentData<SimulationConfig>(singletonEntity).maxParticles);
-
-            if (_dynamicRenderer != null)
-                _dynamicRenderer.Initialize(world);
+                entityManager.GetComponentData<SimulationConfig>(singletonEntity).maxParticles);
         }
 
         private void OnDestroy()
         {
             ParticleSimulationSpatialGrid.DisposeAll();
+            if (_runtimeQuadMesh != null)
+                Destroy(_runtimeQuadMesh);
         }
 
         private void CreateSingletons()
         {
-            singletonEntity = em.CreateEntity();
-            em.AddComponentData(singletonEntity, new SpatialGridMapTag());
-            em.AddComponentData(singletonEntity, new RigidComState { center = float2.zero, count = 0 });
+            singletonEntity = entityManager.CreateEntity();
+            entityManager.AddComponentData(singletonEntity, new SpatialGridMapTag());
+            entityManager.AddComponentData(singletonEntity, new RigidComState { center = float2.zero, count = 0 });
 
             var maxEstimate = 1;
             if (_imageToFluid != null)
@@ -118,7 +160,7 @@ namespace ParticlesSimulation
             cfg.maxParticles = math.max(cfg.maxParticles, maxEstimate + 256);
             cfg.uniformParticleMass = _particleMass;
 
-            em.AddComponentData(singletonEntity, cfg);
+            entityManager.AddComponentData(singletonEntity, cfg);
         }
 
         private void SpawnParticles()
@@ -126,7 +168,14 @@ namespace ParticlesSimulation
             if (spawned)
                 return;
 
-            var buffer = new NativeList<SpawnParticle>(Allocator.Temp);
+            if (_particleMaterial == null)
+            {
+                Debug.LogError(
+                    "[ParticleSimulationBootstrap] No particle material assigned - cannot spawn entities with graphics components.");
+                return;
+            }
+
+            var buffer = new NativeList<SpawnParticle>(Allocator.TempJob);
             try
             {
                 if (_imageToFluid != null && _imageToFluid.IsReady)
@@ -140,63 +189,73 @@ namespace ParticlesSimulation
                     return;
                 }
 
-                var com = float2.zero;
+                var centerOfMass = float2.zero;
                 for (var i = 0; i < buffer.Length; i++)
-                    com += buffer[i].position;
-                com /= buffer.Length;
+                    centerOfMass += buffer[i].position;
+                centerOfMass /= buffer.Length;
 
-                var archetype = em.CreateArchetype(
+                var archetype = entityManager.CreateArchetype(
                     typeof(ParticleCore),
                     typeof(ParticleFluid),
                     typeof(ParticleState),
                     typeof(GridHash),
                     typeof(ParticleDrawColor),
-                    typeof(ParticleSimTag));
+                    // typeof(ParticleSimTag),
+                    typeof(URPMaterialPropertyBaseColor),
+                    typeof(LocalTransform));
 
-                using var entities = new NativeArray<Entity>(buffer.Length, Allocator.Temp);
-                em.CreateEntity(archetype, entities);
-
-                for (var i = 0; i < buffer.Length; i++)
+                var prototype = entityManager.CreateEntity(archetype);
+                var mesh = _quadMesh;
+                if (mesh == null)
                 {
-                    var p = buffer[i];
-                    var local = p.position - com;
-                    var colorId = (byte)math.min(p.colorIndex, 7);
-
-                    var core = new ParticleCore
-                    {
-                        position = p.position,
-                        predictedPosition = p.position,
-                        velocity = float2.zero,
-                        mass = _particleMass
-                    };
-
-                    var fluid = new ParticleFluid
-                    {
-                        density = 0f,
-                        pressure = 0f,
-                        restDensity = _restDensity,
-                        mass = _particleMass,
-                        lambda = 0f
-                    };
-
-                    var st = new ParticleState
-                    {
-                        phase = ParticlePhase.Rigid,
-                        initialLocalPosition = local,
-                        colorId = colorId
-                    };
-
-                    var e = entities[i];
-                    em.SetComponentData(e, core);
-                    em.SetComponentData(e, fluid);
-                    em.SetComponentData(e, st);
-                    em.SetComponentData(e, default(GridHash));
-                    em.SetComponentData(e, new ParticleDrawColor { value = p.color });
+                    _runtimeQuadMesh = CreateUnitQuadMesh();
+                    mesh = _runtimeQuadMesh;
                 }
 
-                var cfg = em.GetComponentData<SimulationConfig>(singletonEntity);
+                var renderMeshArray = new RenderMeshArray(new[] { _particleMaterial }, new[] { mesh });
+                var desc = new RenderMeshDescription(
+                    shadowCastingMode: ShadowCastingMode.Off,
+                    receiveShadows: false,
+                    motionVectorGenerationMode: MotionVectorGenerationMode.ForceNoMotion,
+                    layer: _renderingLayer);
+
+                RenderMeshUtility.AddComponents(
+                    prototype,
+                    entityManager,
+                    desc,
+                    renderMeshArray,
+                    MaterialMeshInfo.FromRenderMeshArrayIndices(0, 0));
+
+                using var entities = new NativeArray<Entity>(buffer.Length, Allocator.TempJob);
+                entityManager.Instantiate(prototype, entities);
+                entityManager.DestroyEntity(prototype);
+
+                using var commandBuffer = new EntityCommandBuffer(Allocator.TempJob);
+
+                var localPos = buffer[0].position;
+                var localTransform = LocalTransform.FromPositionRotationScale(
+                    new float3(localPos.x, localPos.y, 0f),
+                    quaternion.identity,
+                    _quadHalfExtent * 2f);
+                Debug.Log(localTransform);
+
+                var setupJob = new SetupParticlesJob
+                {
+                    Entities = entities,
+                    Buffer = buffer.AsDeferredJobArray(),
+                    CommandBuffer = commandBuffer.AsParallelWriter(),
+                    CenterOfMass = centerOfMass,
+                    ParticleMass = _particleMass,
+                    RestDensity = _restDensity,
+                    QuadScale = _quadHalfExtent * 2f
+                };
+
+                setupJob.Schedule(buffer.Length, 64).Complete();
+                commandBuffer.Playback(entityManager);
+
+                var cfg = entityManager.GetComponentData<SimulationConfig>(singletonEntity);
                 cfg.maxParticles = math.max(cfg.maxParticles, buffer.Length + 256);
-                em.SetComponentData(singletonEntity, cfg);
+                entityManager.SetComponentData(singletonEntity, cfg);
 
                 spawned = true;
             }
@@ -204,6 +263,29 @@ namespace ParticlesSimulation
             {
                 buffer.Dispose();
             }
+        }
+
+        private static Mesh CreateUnitQuadMesh()
+        {
+            var m = new Mesh { name = "ParticleECSUnitQuad" };
+            m.vertices = new[]
+            {
+                new Vector3(-0.5f, -0.5f, 0f),
+                new Vector3(-0.5f, 0.5f, 0f),
+                new Vector3(0.5f, 0.5f, 0f),
+                new Vector3(0.5f, -0.5f, 0f)
+            };
+            m.uv = new[]
+            {
+                new Vector2(0f, 0f),
+                new Vector2(0f, 1f),
+                new Vector2(1f, 1f),
+                new Vector2(1f, 0f)
+            };
+            m.triangles = new[] { 0, 1, 2, 0, 2, 3 };
+            m.RecalculateNormals();
+            m.RecalculateBounds();
+            return m;
         }
 
         private void AppendFromImage(NativeList<SpawnParticle> buffer)
@@ -243,13 +325,6 @@ namespace ParticlesSimulation
                     });
                 }
             }
-        }
-
-        private struct SpawnParticle
-        {
-            public float2 position;
-            public float4 color;
-            public int colorIndex;
         }
     }
 }

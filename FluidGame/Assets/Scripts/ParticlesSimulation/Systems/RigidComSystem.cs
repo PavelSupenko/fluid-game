@@ -1,10 +1,11 @@
+using ParticlesSimulation.Components;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
 
-namespace ParticlesSimulation
+namespace ParticlesSimulation.Systems
 {
     [BurstCompile(FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard)]
     internal struct RigidComAccumulateJob : IJob

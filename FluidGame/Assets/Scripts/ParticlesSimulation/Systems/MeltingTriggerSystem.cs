@@ -1,7 +1,8 @@
+using ParticlesSimulation.Components;
 using Unity.Burst;
 using Unity.Entities;
 
-namespace ParticlesSimulation
+namespace ParticlesSimulation.Systems
 {
     /// <summary>
     /// Switches particles to fluid when world <see cref="ParticleCore.position"/>.y is at or below MeltLineY.

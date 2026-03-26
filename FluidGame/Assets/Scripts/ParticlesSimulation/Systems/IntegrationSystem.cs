@@ -1,8 +1,8 @@
+using ParticlesSimulation.Components;
 using Unity.Entities;
-using Unity.Jobs;
 using Unity.Mathematics;
 
-namespace ParticlesSimulation
+namespace ParticlesSimulation.Systems
 {
     /// <summary>
     /// Finalizes velocity from constrained predictions, commits positions, then applies light fluid damping.
@@ -31,9 +31,9 @@ namespace ParticlesSimulation
 
             var handle = state.Dependency;
 
-            handle = new IntegratePositionsJob { invDt = invDt }.ScheduleParallel(query, handle);
+            handle = new Jobs.IntegratePositionsJob { invDt = invDt }.ScheduleParallel(query, handle);
 
-            handle = new ApplyScalarFluidDampingJob
+            handle = new Jobs.ApplyScalarFluidDampingJob
             {
                 damping = math.saturate(cfg.viscosityMultiplier * cfg.deltaTime)
             }.ScheduleParallel(query, handle);

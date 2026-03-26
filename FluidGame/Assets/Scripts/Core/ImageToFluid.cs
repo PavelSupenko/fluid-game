@@ -33,7 +33,7 @@ public class ImageToFluid : MonoBehaviour
 
     [Header("Particle Resolution")]
     [Tooltip("Max particles along the wider image axis. Total particles = this² (roughly).")]
-    [Range(20, 200)]
+    [Range(2, 200)]
     public int resolution = 80;
 
     [Header("Uniform Physics")]

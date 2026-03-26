@@ -1,8 +1,10 @@
+using ParticlesSimulation.Components;
+using ParticlesSimulation.Jobs;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
 
-namespace ParticlesSimulation
+namespace ParticlesSimulation.Systems
 {
     /// <summary>
     /// Coupled PBF sub-step: spatial hash rebuild, density from Poly6 neighbors, lambda/delta PBF solve,

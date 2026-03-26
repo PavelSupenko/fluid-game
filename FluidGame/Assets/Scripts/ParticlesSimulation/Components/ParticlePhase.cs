@@ -1,4 +1,4 @@
-namespace ParticlesSimulation
+namespace ParticlesSimulation.Components
 {
     /// <summary>
     /// Rigid particles preserve image structure via shape matching; fluid particles use PBF.

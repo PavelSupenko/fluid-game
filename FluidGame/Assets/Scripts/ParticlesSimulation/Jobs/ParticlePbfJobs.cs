@@ -1,10 +1,11 @@
+using ParticlesSimulation.Components;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
 
-namespace ParticlesSimulation
+namespace ParticlesSimulation.Jobs
 {
     [BurstCompile(FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard)]
     [WithAll(typeof(ParticleSimTag))]
@@ -148,7 +149,7 @@ namespace ParticlesSimulation
                         var r2 = math.lengthsq(delta);
                         var notSelf = math.select(0f, 1f, r2 > 1e-12f);
                         var fj = math.select(0f, 1f, states[ej].phase == ParticlePhase.Fluid);
-                        var g = PbfKernels.SpikyGradVec(delta, h, spikyGradCoefficient);
+                        PbfKernels.SpikyGradVec(delta, h, spikyGradCoefficient, out var g);
                         var gradScale = fluidMask * fj * notSelf;
                         var gradRho = g * mj;
                         denom += math.lengthsq(gradRho) * gradScale;
@@ -208,7 +209,7 @@ namespace ParticlesSimulation
                         var r2 = math.lengthsq(delta);
                         var notSelf = math.select(0f, 1f, r2 > 1e-12f);
                         var fj = math.select(0f, 1f, states[ej].phase == ParticlePhase.Fluid);
-                        var g = PbfKernels.SpikyGradVec(delta, h, spikyGradCoefficient);
+                        PbfKernels.SpikyGradVec(delta, h, spikyGradCoefficient, out var g);
                         var lambdaJ = fluids[ej].lambda;
                         var pair = fluidMask * fj * notSelf;
                         var coeff = (lambdaI + lambdaJ) / rho0 * mj * pair;

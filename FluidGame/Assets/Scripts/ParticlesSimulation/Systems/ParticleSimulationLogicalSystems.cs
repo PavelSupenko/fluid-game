@@ -1,4 +1,4 @@
-namespace ParticlesSimulation
+namespace ParticlesSimulation.Systems
 {
     /// <summary>
     /// Design mapping: the PBF pipeline requires rebuilding the spatial hash and density each solver iteration.
