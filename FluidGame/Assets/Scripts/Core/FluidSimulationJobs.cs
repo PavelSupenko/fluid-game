@@ -476,7 +476,7 @@ public class FluidSimulationJobs : MonoBehaviour
             containerMin = new float2(containerMin.x, containerMin.y),
             gridW = hashGridW, gridH = hashGridH
         };
-        assignJob.Schedule(ParticleCount, 128).Complete();
+        ScheduleJob(assignJob, ParticleCount);
 
         new BuildGridJob
         {
@@ -560,6 +560,14 @@ public class FluidSimulationJobs : MonoBehaviour
 
         springsBuilt = true;
         Debug.Log($"[FluidSimJobs] Spring network built for {ParticleCount} particles");
+    }
+
+    private void ScheduleJob<T>(T job, int count) where T : struct, IJobParallelFor
+    {
+        // var jobWorkersCount = JobsUtility.JobWorkerCount;
+        // var innerLoopBatchCount = jobWorkersCount != 0 ? count / jobWorkersCount : 1;
+        // innerLoopBatchCount = Math.Max(1, innerLoopBatchCount);
+        job.Schedule(count, 64).Complete();
     }
 
     void CalibrateRestDensity()
@@ -913,7 +921,7 @@ public class FluidSimulationJobs : MonoBehaviour
             containerMin = new float2(containerMin.x, containerMin.y),
             gridW = hashGridW, gridH = hashGridH
         };
-        assignJob.Schedule(ParticleCount, 128).Complete();
+        ScheduleJob(assignJob, ParticleCount);
 
         var buildGridJob = new BuildGridJob
         {
@@ -927,7 +935,7 @@ public class FluidSimulationJobs : MonoBehaviour
         buildGridJob.Run();
 
         // 2. Density — AWAKE only (sleeping+falling contribute as neighbors but don't compute)
-        new DensityJob
+        var densityJob = new DensityJob
         {
             particles = particles,
             sleepState = sleepState,
@@ -946,10 +954,12 @@ public class FluidSimulationJobs : MonoBehaviour
             poly6Coeff = 4f / (math.PI * math.pow(smoothingRadius, 8)),
             tensionFactor = tensionFactor,
             tensionClamp = tensionClamp
-        }.Schedule(ParticleCount, 128).Complete();
+        };
+        
+        ScheduleJob(densityJob, ParticleCount);
 
         // 3. Forces — AWAKE only
-        new ForcesJob
+        var forcesJob = new ForcesJob
         {
             particles = particles,
             sleepState = sleepState,
@@ -975,12 +985,14 @@ public class FluidSimulationJobs : MonoBehaviour
             uniformFluid = uniformFluid,
             spikyGradCoeff = -10f / (math.PI * math.pow(smoothingRadius, 5)),
             viscLaplCoeff = 40f / (math.PI * math.pow(smoothingRadius, 5))
-        }.Schedule(ParticleCount, 64).Complete();
+        };
+        
+        ScheduleJob(forcesJob, ParticleCount);
 
         // 3b. Spring forces — AWAKE only
         if (enableSprings && springsBuilt)
         {
-            new SpringForceJob
+            var springForceJob = new SpringForceJob
             {
                 particles = particles,
                 sleepState = sleepState,
@@ -991,19 +1003,23 @@ public class FluidSimulationJobs : MonoBehaviour
                 springStiffness = springStiffness,
                 springDamping = springDamping,
                 springBreakThreshold = springBreakThreshold
-            }.Schedule(ParticleCount, 64).Complete();
+            };
+            
+            ScheduleJob(springForceJob, ParticleCount);
 
-            new AddSpringForcesJob
+            var addSpringForcesJob = new AddSpringForcesJob
             {
                 forces = forces,
                 springForces = springForces,
                 sleepState = sleepState,
                 alive = particles
-            }.Schedule(ParticleCount, 256).Complete();
+            };
+            
+            ScheduleJob(addSpringForcesJob, ParticleCount);
         }
 
         // 4. Integrate AWAKE — full physics with flask suction
-        new IntegrateJob
+        var integrateJob = new IntegrateJob
         {
             particles = particles,
             sleepState = sleepState,
@@ -1026,10 +1042,12 @@ public class FluidSimulationJobs : MonoBehaviour
             flaskRadius = flaskRadius,
             flaskAbsorbRadius = flaskAbsorbRadius,
             flaskStrength = flaskStrength
-        }.Schedule(ParticleCount, 128).Complete();
+        };
+        
+        ScheduleJob(integrateJob, ParticleCount);
 
         // 4b. Integrate FALLING — gravity + boundary only (~6x cheaper than full SPH)
-        new FallingIntegrateJob
+        var fallingIntegrateJob = new FallingIntegrateJob
         {
             particles = particles,
             sleepState = sleepState,
@@ -1043,7 +1061,9 @@ public class FluidSimulationJobs : MonoBehaviour
             containerMin = new float2(containerMin.x, containerMin.y),
             containerMax = new float2(containerMax.x, containerMax.y),
             uniformFluid = uniformFluid
-        }.Schedule(ParticleCount, 256).Complete();
+        };
+        
+        ScheduleJob(fallingIntegrateJob, ParticleCount);
 
         // 5. PBF density correction — AWAKE only
         if (enableDensityCorrection)
@@ -1055,11 +1075,11 @@ public class FluidSimulationJobs : MonoBehaviour
             {
                 if (iter > 0)
                 {
-                    assignJob.Schedule(ParticleCount, 128).Complete();
+                    ScheduleJob(assignJob, ParticleCount);
                     buildGridJob.Run();
                 }
 
-                new ComputeLambdaJob
+                var computeLambdaJob = new ComputeLambdaJob
                 {
                     particles = particles,
                     sleepState = sleepState,
@@ -1078,9 +1098,11 @@ public class FluidSimulationJobs : MonoBehaviour
                     spikyGradCoeff = spikyC,
                     relaxation = pbfRelaxation,
                     particleMass = particleMass
-                }.Schedule(ParticleCount, 128).Complete();
+                };
+                
+                ScheduleJob(computeLambdaJob, ParticleCount);
 
-                new ComputeDensityCorrectionJob
+                var computeDensityCorrectionJob = new ComputeDensityCorrectionJob
                 {
                     particles = particles,
                     sleepState = sleepState,
@@ -1098,9 +1120,11 @@ public class FluidSimulationJobs : MonoBehaviour
                     restDensity = restDensity,
                     spikyGradCoeff = spikyC,
                     particleMass = particleMass
-                }.Schedule(ParticleCount, 128).Complete();
+                };
+                
+                ScheduleJob(computeDensityCorrectionJob, ParticleCount);
 
-                new ApplyDensityCorrectionJob
+                var applyDensityCorrectionJob = new ApplyDensityCorrectionJob
                 {
                     particles = particles,
                     sleepState = sleepState,
@@ -1108,14 +1132,16 @@ public class FluidSimulationJobs : MonoBehaviour
                     containerMin = new float2(containerMin.x, containerMin.y),
                     containerMax = new float2(containerMax.x, containerMax.y),
                     particleRadius = particleRadius
-                }.Schedule(ParticleCount, 128).Complete();
+                };
+                
+                ScheduleJob(applyDensityCorrectionJob, ParticleCount);
             }
         }
 
         // 5b. XSPH — AWAKE only
         if (xsphFactor > 0.001f)
         {
-            new XSPHJob
+            var xsphJob = new XSPHJob
             {
                 particles = particles,
                 sleepState = sleepState,
@@ -1132,18 +1158,22 @@ public class FluidSimulationJobs : MonoBehaviour
                 poly6Coeff = 4f / (math.PI * math.pow(smoothingRadius, 8)),
                 xsphFactor = xsphFactor,
                 sameTypeOnly = xsphSameTypeOnly
-            }.Schedule(ParticleCount, 128).Complete();
+            };
+            
+            ScheduleJob(xsphJob, ParticleCount);
 
-            new ApplyXSPHJob
+            var applyXsphJob = new ApplyXSPHJob
             {
                 particles = particles,
                 sleepState = sleepState,
                 smoothedVelocities = smoothedVelocities
-            }.Schedule(ParticleCount, 256).Complete();
+            };
+
+            ScheduleJob(applyXsphJob, ParticleCount);
         }
 
         // 6. Collision — AWAKE + FALLING (both need collision, sleeping is static wall)
-        new ParticleCollisionJob
+        var particleCollisionJob = new ParticleCollisionJob
         {
             particles = particles,
             sleepState = sleepState,
@@ -1157,19 +1187,23 @@ public class FluidSimulationJobs : MonoBehaviour
             gridW = hashGridW, gridH = hashGridH,
             minDistance = particleSpacing * collisionRadiusFactor,
             pushStrength = collisionPushStrength
-        }.Schedule(ParticleCount, 128).Complete();
+        };
+        
+        ScheduleJob(particleCollisionJob, ParticleCount);
 
-        new ApplyCollisionJob
+        var applyCollisionJob = new ApplyCollisionJob
         {
             particles = particles,
             collisionCorrections = collisionCorrections,
             sleepState = sleepState
-        }.Schedule(ParticleCount, 256).Complete();
+        };
+        
+        ScheduleJob(applyCollisionJob, ParticleCount);
 
         // 7. Contact promotion — FALLING particles near AWAKE → promote to AWAKE
         //    This is the key mechanism: falling particles only get full SPH
         //    when they reach the contact zone at the bottom.
-        new ContactPromotionJob
+        var contactPromotionJob = new ContactPromotionJob
         {
             particles = particles,
             sleepState = sleepState,
@@ -1180,11 +1214,13 @@ public class FluidSimulationJobs : MonoBehaviour
             containerMin = new float2(containerMin.x, containerMin.y),
             gridW = hashGridW, gridH = hashGridH,
             contactRadiusSqr = contactPromotionRadius * contactPromotionRadius
-        }.Schedule(ParticleCount, 128).Complete();
-
+        };
+        
+        ScheduleJob(contactPromotionJob, ParticleCount);
+        
         // 8. Sleep check — AWAKE particles with low velocity → SLEEPING
         //    FALLING particles don't sleep (they need to keep falling)
-        new SleepCheckJob
+        var sleepCheckJob = new SleepCheckJob
         {
             particles = particles,
             sleepState = sleepState,
@@ -1193,7 +1229,9 @@ public class FluidSimulationJobs : MonoBehaviour
             sleepVelThresholdSqr = sleepVelocityThreshold * sleepVelocityThreshold,
             sleepFramesRequired = sleepFramesRequired,
             maxWakeGenerations = maxWakeGenerations
-        }.Schedule(ParticleCount, 256).Complete();
+        };
+        
+        ScheduleJob(sleepCheckJob, ParticleCount);
     }
 
     // ─── GPU Upload ──────────────────────────────────────────────
