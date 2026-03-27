@@ -275,11 +275,11 @@ MonoBehaviour:
   blobSharpness: 8
   resolutionScale: 0.85
   enableBridges: 1
-  bridgeRadiusMultiplier: 2.5
-  bridgeAlpha: 0.9
-  bridgeEdgeSoftness: 0.5
-  bridgeWidthMultiplier: 2.5
-  bridgeRebuildInterval: 2
+  bridgeRadiusMultiplier: 1.37
+  bridgeAlpha: 0.976
+  bridgeEdgeSoftness: 0.932
+  bridgeWidthMultiplier: 2.377
+  bridgeRebuildInterval: 5
   solidColors: 1
   showDebugRT: 0
 --- !u!1 &619394800
