@@ -271,14 +271,14 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   showMetaballs: 1
   splatScale: 0.11
-  splatScaleMultiplierFromSpacing: 2
+  splatScaleMultiplierFromSpacing: 1.8
   blobSharpness: 8
   resolutionScale: 0.85
   enableBridges: 1
-  bridgeRadiusMultiplier: 1.46
-  bridgeAlpha: 1
-  bridgeEdgeSoftness: 0.477
-  bridgeWidthMultiplier: 2.207
+  bridgeRadiusMultiplier: 1.37
+  bridgeAlpha: 0.976
+  bridgeEdgeSoftness: 0.932
+  bridgeWidthMultiplier: 2.377
   bridgeRebuildInterval: 5
   solidColors: 1
   showDebugRT: 0
@@ -503,10 +503,10 @@ MonoBehaviour:
   particleRadius: 0.032
   smoothingRadius: 0.19999999
   particleMass: 1
-  restDensity: 147.54317
+  restDensity: 50
   autoRestDensity: 1
-  pressureStiffness: 200
-  nearPressureStiffness: 15
+  pressureStiffness: 80
+  nearPressureStiffness: 5
   tensionFactor: 0.8
   tensionClamp: 0.6
   enableDensityCorrection: 1
@@ -515,18 +515,18 @@ MonoBehaviour:
   xsphFactor: 0.2
   xsphSameTypeOnly: 1
   enableSprings: 1
-  springStiffness: 41.3
-  springBreakThreshold: 2.324
-  maxSpringsPerParticle: 9
+  springStiffness: 1
+  springBreakThreshold: 1.8
+  maxSpringsPerParticle: 12
   springDamping: 0.3
-  cohesionStrength: 20
-  interTypeRepulsion: 12
-  surfaceTensionStrength: 8
+  cohesionStrength: 15
+  interTypeRepulsion: 8
+  surfaceTensionStrength: 5
   uniformFluid: 0
-  collisionRadiusFactor: 2
-  collisionPushStrength: 0.1
+  collisionRadiusFactor: 0.85
+  collisionPushStrength: 0.8
   enableMerging: 1
-  maxMergeSize: 9
+  maxMergeSize: 4
   mergeInterval: 10
   mergeVelocityThreshold: 0.1
   cohesionMassExponent: 1.5
@@ -541,9 +541,9 @@ MonoBehaviour:
   wakeBudgetPerFrame: 70
   wakeRadius: 0.5
   startSleeping: 1
-  maxWakeGenerations: 2
-  contactPromotionRadius: 0.2
-  wakeWaveRowsPerFrame: 1
+  maxWakeGenerations: 8
+  contactPromotionRadius: 0.6
+  wakeWaveRowsPerFrame: 3
   fluidTypes:
   - name: Color_0
     color: {r: 0.98086244, g: 0.725832, b: 0.8958105, a: 1}

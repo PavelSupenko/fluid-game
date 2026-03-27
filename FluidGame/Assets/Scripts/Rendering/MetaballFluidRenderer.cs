@@ -112,7 +112,7 @@ public class MetaballFluidRenderer : MonoBehaviour
     {
         cam = GetComponent<Camera>();
 
-        var circleRenderer = FindObjectOfType<FluidRendererGPU>();
+        var circleRenderer = FindObjectOfType<FluidRenderer>();
         if (circleRenderer != null && circleRenderer.enabled)
             circleRenderer.showParticles = false;
 
