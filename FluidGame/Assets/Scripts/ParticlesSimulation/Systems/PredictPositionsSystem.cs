@@ -18,6 +18,7 @@ namespace ParticlesSimulation.Systems
         {
             state.RequireForUpdate<SimulationConfig>();
             state.RequireForUpdate<ParticleSimTag>();
+            state.RequireForUpdate<ParticleState>();
         }
 
         [BurstCompile]
@@ -27,10 +28,13 @@ namespace ParticlesSimulation.Systems
             var dt = cfg.deltaTime;
             var gravity = new float2(0f, cfg.gravityY);
 
-            foreach (var core in SystemAPI.Query<RefRW<ParticleCore>>().WithAll<ParticleSimTag>())
+            foreach (var (core, pstate) in SystemAPI
+                         .Query<RefRW<ParticleCore>, RefRO<ParticleState>>()
+                         .WithAll<ParticleSimTag>())
             {
                 var c = core.ValueRO;
-                var vAdj = c.velocity + gravity * dt;
+                var fluidMask = math.select(0f, 1f, pstate.ValueRO.phase == ParticlePhase.Fluid);
+                var vAdj = c.velocity + gravity * dt * fluidMask;
                 var predicted = c.position + vAdj * dt;
                 core.ValueRW.predictedPosition = predicted;
             }

@@ -81,7 +81,7 @@ namespace ParticlesSimulation
 
         [FormerlySerializedAs("restDensity")]
         [SerializeField]
-        private float _restDensity = 1150f;
+        private float _restDensity = 300;
 
         [FormerlySerializedAs("dynamicRenderer")]
         [Header("Entities Graphics (URP)")]
@@ -121,13 +121,10 @@ namespace ParticlesSimulation
             entityManager = world.EntityManager;
             CreateSingletons();
             SpawnParticles();
-            ParticleSimulationSpatialGrid.EnsureCapacity(
-                entityManager.GetComponentData<SimulationConfig>(singletonEntity).maxParticles);
         }
 
         private void OnDestroy()
         {
-            ParticleSimulationSpatialGrid.DisposeAll();
             if (_runtimeQuadMesh != null)
                 Destroy(_runtimeQuadMesh);
         }

@@ -1,5 +1,6 @@
 using ParticlesSimulation.Components;
 using ParticlesSimulation.Jobs;
+using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
@@ -17,6 +18,8 @@ namespace ParticlesSimulation.Systems
     public partial struct ParticlePbfLoopSystem : ISystem
     {
         private EntityQuery query;
+        private NativeParallelMultiHashMap<int, Entity> _spatialCells;
+        private NativeArray<float2> _pbfDeltaScratch;
 
         public void OnCreate(ref SystemState state)
         {
@@ -28,13 +31,35 @@ namespace ParticlesSimulation.Systems
             state.RequireForUpdate<RigidComState>();
         }
 
+        public void OnDestroy(ref SystemState state)
+        {
+            if (_spatialCells.IsCreated)
+                _spatialCells.Dispose();
+            if (_pbfDeltaScratch.IsCreated)
+                _pbfDeltaScratch.Dispose();
+        }
+
+        private void EnsureGridBuffers(int maxParticles)
+        {
+            var cap = math.max(256, maxParticles);
+            if (!_spatialCells.IsCreated)
+                _spatialCells = new NativeParallelMultiHashMap<int, Entity>(cap * 2, Allocator.Persistent);
+
+            if (!_pbfDeltaScratch.IsCreated || _pbfDeltaScratch.Length < cap)
+            {
+                if (_pbfDeltaScratch.IsCreated)
+                    _pbfDeltaScratch.Dispose();
+                _pbfDeltaScratch = new NativeArray<float2>(cap, Allocator.Persistent);
+            }
+        }
+
         public void OnUpdate(ref SystemState state)
         {
             var cfg = SystemAPI.GetSingleton<SimulationConfig>();
-            ParticleSimulationSpatialGrid.EnsureCapacity(cfg.maxParticles);
+            EnsureGridBuffers(cfg.maxParticles);
 
-            var grid = ParticleSimulationSpatialGrid.Cells;
-            var deltaScratch = ParticleSimulationSpatialGrid.PbfDeltaScratch;
+            var grid = _spatialCells;
+            var deltaScratch = _pbfDeltaScratch;
             var com = SystemAPI.GetSingleton<RigidComState>();
 
             var coresRo = SystemAPI.GetComponentLookup<ParticleCore>(true);

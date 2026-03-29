@@ -12,6 +12,7 @@ namespace ParticlesSimulation.Systems
     [BurstCompile]
     [UpdateInGroup(typeof(SimulationSystemGroup))]
     [UpdateAfter(typeof(IntegrationSystem))]
+    [UpdateBefore(typeof(TransformSystemGroup))]
     public partial struct ParticleLocalTransformSyncSystem : ISystem
     {
         [BurstCompile]

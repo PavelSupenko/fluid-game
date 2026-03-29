@@ -1,3 +1,4 @@
+using System;
 using ParticlesSimulation.Components;
 using Unity.Burst;
 using Unity.Collections;
@@ -7,6 +8,24 @@ using Unity.Mathematics;
 
 namespace ParticlesSimulation.Jobs
 {
+    /// <summary>Fills nine spatial hash keys for the 3×3 cell neighborhood (stackalloc Span in callers).</summary>
+    [BurstCompile(FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard)]
+    internal static class PbfNeighborHashes
+    {
+        [BurstCompile(FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard)]
+        public static void Fill(in int2 origin, in Span<int> keys)
+        {
+            var index = 0;
+            for (var ox = -1; ox <= 1; ox++)
+            {
+                for (var oy = -1; oy <= 1; oy++)
+                {
+                    keys[index++] = SpatialHash2D.HashCell(origin.x + ox, origin.y + oy);
+                }
+            }
+        }
+    }
+
     [BurstCompile(FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard)]
     [WithAll(typeof(ParticleSimTag))]
     internal partial struct IntegratePositionsJob : IJobEntity
@@ -93,23 +112,23 @@ namespace ParticlesSimulation.Jobs
             var origin = SpatialHash2D.CellCoords(pi, cellInv);
             var mj = uniformParticleMass;
 
-            for (var ox = -1; ox <= 1; ox++)
-            {
-                for (var oy = -1; oy <= 1; oy++)
-                {
-                    var key = SpatialHash2D.HashCell(origin.x + ox, origin.y + oy);
-                    if (!grid.TryGetFirstValue(key, out var ej, out var iterator))
-                        continue;
+            Span<int> neighborHashes = stackalloc int[9];
+            PbfNeighborHashes.Fill(origin, neighborHashes);
 
-                    do
-                    {
-                        var pj = cores[ej].predictedPosition;
-                        var d = pi - pj;
-                        var r2 = math.lengthsq(d);
-                        var w = PbfKernels.Poly6(r2, h2, poly6Coefficient);
-                        density += w * mj;
-                    } while (grid.TryGetNextValue(out ej, ref iterator));
-                }
+            for (var ni = 0; ni < 9; ni++)
+            {
+                var key = neighborHashes[ni];
+                if (!grid.TryGetFirstValue(key, out var ej, out var iterator))
+                    continue;
+
+                do
+                {
+                    var pj = cores[ej].predictedPosition;
+                    var d = pi - pj;
+                    var r2 = math.lengthsq(d);
+                    var w = PbfKernels.Poly6(r2, h2, poly6Coefficient);
+                    density += w * mj;
+                } while (grid.TryGetNextValue(out ej, ref iterator));
             }
 
             fluid.density = density;
@@ -144,27 +163,27 @@ namespace ParticlesSimulation.Jobs
             var origin = SpatialHash2D.CellCoords(pi, cellInv);
             var mj = uniformParticleMass;
 
-            for (var ox = -1; ox <= 1; ox++)
-            {
-                for (var oy = -1; oy <= 1; oy++)
-                {
-                    var key = SpatialHash2D.HashCell(origin.x + ox, origin.y + oy);
-                    if (!grid.TryGetFirstValue(key, out var ej, out var iterator))
-                        continue;
+            Span<int> neighborHashes = stackalloc int[9];
+            PbfNeighborHashes.Fill(origin, neighborHashes);
 
-                    do
-                    {
-                        var pj = cores[ej].predictedPosition;
-                        var delta = pi - pj;
-                        var r2 = math.lengthsq(delta);
-                        var notSelf = math.select(0f, 1f, r2 > 1e-12f);
-                        var fj = math.select(0f, 1f, states[ej].phase == ParticlePhase.Fluid);
-                        PbfKernels.SpikyGradVec(delta, h, spikyGradCoefficient, out var g);
-                        var gradScale = fluidMask * fj * notSelf;
-                        var gradRho = g * mj;
-                        denom += math.lengthsq(gradRho) * gradScale;
-                    } while (grid.TryGetNextValue(out ej, ref iterator));
-                }
+            for (var ni = 0; ni < 9; ni++)
+            {
+                var key = neighborHashes[ni];
+                if (!grid.TryGetFirstValue(key, out var ej, out var iterator))
+                    continue;
+
+                do
+                {
+                    var pj = cores[ej].predictedPosition;
+                    var delta = pi - pj;
+                    var r2 = math.lengthsq(delta);
+                    var notSelf = math.select(0f, 1f, r2 > 1e-12f);
+                    var fj = math.select(0f, 1f, states[ej].phase == ParticlePhase.Fluid);
+                    PbfKernels.SpikyGradVec(delta, h, spikyGradCoefficient, out var g);
+                    var gradScale = fluidMask * fj * notSelf;
+                    var gradRho = g * mj;
+                    denom += math.lengthsq(gradRho) * gradScale;
+                } while (grid.TryGetNextValue(out ej, ref iterator));
             }
 
             var c = rho / rho0 - 1f;
@@ -204,28 +223,28 @@ namespace ParticlesSimulation.Jobs
             var origin = SpatialHash2D.CellCoords(pi, cellInv);
             var mj = uniformParticleMass;
 
-            for (var ox = -1; ox <= 1; ox++)
-            {
-                for (var oy = -1; oy <= 1; oy++)
-                {
-                    var key = SpatialHash2D.HashCell(origin.x + ox, origin.y + oy);
-                    if (!grid.TryGetFirstValue(key, out var ej, out var iterator))
-                        continue;
+            Span<int> neighborHashes = stackalloc int[9];
+            PbfNeighborHashes.Fill(origin, neighborHashes);
 
-                    do
-                    {
-                        var pj = cores[ej].predictedPosition;
-                        var delta = pi - pj;
-                        var r2 = math.lengthsq(delta);
-                        var notSelf = math.select(0f, 1f, r2 > 1e-12f);
-                        var fj = math.select(0f, 1f, states[ej].phase == ParticlePhase.Fluid);
-                        PbfKernels.SpikyGradVec(delta, h, spikyGradCoefficient, out var g);
-                        var lambdaJ = fluids[ej].lambda;
-                        var pair = fluidMask * fj * notSelf;
-                        var coeff = (lambdaI + lambdaJ) / rho0 * mj * pair;
-                        accum += coeff * g;
-                    } while (grid.TryGetNextValue(out ej, ref iterator));
-                }
+            for (var ni = 0; ni < 9; ni++)
+            {
+                var key = neighborHashes[ni];
+                if (!grid.TryGetFirstValue(key, out var ej, out var iterator))
+                    continue;
+
+                do
+                {
+                    var pj = cores[ej].predictedPosition;
+                    var delta = pi - pj;
+                    var r2 = math.lengthsq(delta);
+                    var notSelf = math.select(0f, 1f, r2 > 1e-12f);
+                    var fj = math.select(0f, 1f, states[ej].phase == ParticlePhase.Fluid);
+                    PbfKernels.SpikyGradVec(delta, h, spikyGradCoefficient, out var g);
+                    var lambdaJ = fluids[ej].lambda;
+                    var pair = fluidMask * fj * notSelf;
+                    var coeff = (lambdaI + lambdaJ) / rho0 * mj * pair;
+                    accum += coeff * g;
+                } while (grid.TryGetNextValue(out ej, ref iterator));
             }
 
             deltaOut[entityIndexInQuery] = deltaScale * accum;

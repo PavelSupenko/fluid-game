@@ -61,7 +61,7 @@ namespace ParticlesSimulation.Components
     }
 
     /// <summary>
-    /// Singleton tag: spatial grid is owned by <see cref="ParticleSimulationSpatialGrid"/>.
+    /// Singleton tag for simulation bootstrap / bounds sync (spatial hash buffers live on <see cref="ParticlesSimulation.Systems.ParticlePbfLoopSystem"/>).
     /// </summary>
     public struct SpatialGridMapTag : IComponentData
     {

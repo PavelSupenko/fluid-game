@@ -336,7 +336,7 @@ MonoBehaviour:
   _rigidShapeStiffness: 0.65
   _solverIterations: 2
   _particleMass: 1
-  _restDensity: 800
+  _restDensity: 200
   _particleMaterial: {fileID: 2100000, guid: fdd1a38c5dd934d2487ea31e043e902f, type: 2}
   _quadMesh: {fileID: 0}
   _quadHalfExtent: 0.1
