@@ -64,6 +64,7 @@ Material:
     - _AlphaToMask: 0
     - _Blend: 0
     - _BlendOp: 0
+    - _BlobSharpness: 3
     - _Cull: 2
     - _Cutoff: 0.5
     - _DstBlend: 0
