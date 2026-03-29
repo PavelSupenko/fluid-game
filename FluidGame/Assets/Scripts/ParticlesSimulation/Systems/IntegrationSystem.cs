@@ -22,16 +22,18 @@ namespace ParticlesSimulation.Systems
                 .Build();
             state.RequireForUpdate(query);
             state.RequireForUpdate<SimulationConfig>();
+            state.RequireForUpdate<SimulationWorldBounds>();
         }
 
         public void OnUpdate(ref SystemState state)
         {
             var cfg = SystemAPI.GetSingleton<SimulationConfig>();
             var invDt = math.rcp(cfg.deltaTime);
+            var bounds = SystemAPI.GetSingleton<SimulationWorldBounds>();
 
             var handle = state.Dependency;
 
-            handle = new Jobs.IntegratePositionsJob { invDt = invDt }.ScheduleParallel(query, handle);
+            handle = new Jobs.IntegratePositionsJob { invDt = invDt, WorldBounds = bounds }.ScheduleParallel(query, handle);
 
             handle = new Jobs.ApplyScalarFluidDampingJob
             {

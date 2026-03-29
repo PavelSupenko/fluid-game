@@ -12,11 +12,21 @@ namespace ParticlesSimulation.Jobs
     internal partial struct IntegratePositionsJob : IJobEntity
     {
         public float invDt;
+        public SimulationWorldBounds WorldBounds;
 
         public void Execute(ref ParticleCore core)
         {
             var pred = core.predictedPosition;
             var pos = core.position;
+            if (WorldBounds.BoundsEnabled != 0)
+            {
+                var ext = WorldBounds.Max - WorldBounds.Min;
+                var margin = math.min(WorldBounds.Margin, math.max(0f, 0.49f * math.cmin(ext)));
+                var min = WorldBounds.Min + margin;
+                var max = WorldBounds.Max - margin;
+                pred = math.clamp(pred, min, max);
+            }
+
             core.velocity = (pred - pos) * invDt;
             core.position = pred;
         }

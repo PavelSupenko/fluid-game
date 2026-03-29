@@ -25,6 +25,10 @@ namespace ParticlesSimulation
         [SerializeField]
         private ImageToFluid _imageToFluid;
 
+        [Tooltip("Optional. When set, simulation is clamped to this rect (world XY) and particles spawn inside it.")]
+        [SerializeField]
+        private ParticleSimulationBounds _simulationBounds;
+
         [FormerlySerializedAs("fallbackGridX")]
         [Header("Fallback grid (no image)")]
         [SerializeField]
@@ -161,6 +165,21 @@ namespace ParticlesSimulation
             cfg.uniformParticleMass = _particleMass;
 
             entityManager.AddComponentData(singletonEntity, cfg);
+
+            var worldBounds = new SimulationWorldBounds { BoundsEnabled = 0 };
+            if (_simulationBounds != null &&
+                RectTransformSimulationBoundsUtility.TryGetWorldAabbXY(_simulationBounds.AreaRect, out var wMin, out var wMax))
+            {
+                worldBounds = new SimulationWorldBounds
+                {
+                    BoundsEnabled = 1,
+                    Min = wMin,
+                    Max = wMax,
+                    Margin = _simulationBounds.Margin
+                };
+            }
+
+            entityManager.AddComponentData(singletonEntity, worldBounds);
         }
 
         private void SpawnParticles()
@@ -179,7 +198,11 @@ namespace ParticlesSimulation
             try
             {
                 if (_imageToFluid != null && _imageToFluid.IsReady)
+                {
                     AppendFromImage(buffer);
+                    if (TryGetSpawnInnerRect(out var innerMin, out var innerMax))
+                        RemapSpawnBufferToInnerRect(buffer, innerMin, innerMax);
+                }
                 else
                     AppendFallbackGrid(buffer);
 
@@ -200,7 +223,7 @@ namespace ParticlesSimulation
                     typeof(ParticleState),
                     typeof(GridHash),
                     typeof(ParticleDrawColor),
-                    // typeof(ParticleSimTag),
+                    typeof(ParticleSimTag),
                     typeof(URPMaterialPropertyBaseColor),
                     typeof(LocalTransform));
 
@@ -231,13 +254,6 @@ namespace ParticlesSimulation
                 entityManager.DestroyEntity(prototype);
 
                 using var commandBuffer = new EntityCommandBuffer(Allocator.TempJob);
-
-                var localPos = buffer[0].position;
-                var localTransform = LocalTransform.FromPositionRotationScale(
-                    new float3(localPos.x, localPos.y, 0f),
-                    quaternion.identity,
-                    _quadHalfExtent * 2f);
-                Debug.Log(localTransform);
 
                 var setupJob = new SetupParticlesJob
                 {
@@ -310,6 +326,32 @@ namespace ParticlesSimulation
 
         private void AppendFallbackGrid(NativeList<SpawnParticle> buffer)
         {
+            if (TryGetSpawnInnerRect(out var innerMin, out var innerMax))
+            {
+                var size = innerMax - innerMin;
+                var nx = math.max(1, _fallbackGridX - 1);
+                var ny = math.max(1, _fallbackGridY - 1);
+                var spacingX = size.x / nx;
+                var spacingY = size.y / ny;
+                for (var y = 0; y < _fallbackGridY; y++)
+                {
+                    for (var x = 0; x < _fallbackGridX; x++)
+                    {
+                        var pos = innerMin + new float2(x * spacingX, y * spacingY);
+                        var t = (float)(x + y) / math.max(1, _fallbackGridX + _fallbackGridY - 2);
+                        var col = Color.HSVToRGB(t, 0.65f, 0.95f);
+                        buffer.Add(new SpawnParticle
+                        {
+                            position = pos,
+                            color = new float4(col.r, col.g, col.b, 1f),
+                            colorIndex = (int)(t * 7f) & 7
+                        });
+                    }
+                }
+
+                return;
+            }
+
             for (var y = 0; y < _fallbackGridY; y++)
             {
                 for (var x = 0; x < _fallbackGridX; x++)
@@ -324,6 +366,55 @@ namespace ParticlesSimulation
                         colorIndex = (int)(t * 7f) & 7
                     });
                 }
+            }
+        }
+
+        private bool TryGetSpawnInnerRect(out float2 innerMin, out float2 innerMax)
+        {
+            innerMin = innerMax = default;
+            if (_simulationBounds == null || _simulationBounds.AreaRect == null)
+                return false;
+            if (!RectTransformSimulationBoundsUtility.TryGetWorldAabbXY(_simulationBounds.AreaRect, out var wMin, out var wMax))
+                return false;
+
+            ComputeInnerClampBox(wMin, wMax, _simulationBounds.Margin, out innerMin, out innerMax);
+            return innerMin.x < innerMax.x && innerMin.y < innerMax.y;
+        }
+
+        private static void ComputeInnerClampBox(float2 wMin, float2 wMax, float margin, out float2 innerMin, out float2 innerMax)
+        {
+            var ext = wMax - wMin;
+            var m = math.min(margin, math.max(0f, 0.49f * math.cmin(ext)));
+            innerMin = wMin + m;
+            innerMax = wMax - m;
+        }
+
+        private static void RemapSpawnBufferToInnerRect(NativeList<SpawnParticle> buffer, float2 innerMin, float2 innerMax)
+        {
+            if (buffer.Length == 0)
+                return;
+
+            var pMin = buffer[0].position;
+            var pMax = pMin;
+            for (var i = 1; i < buffer.Length; i++)
+            {
+                var p = buffer[i].position;
+                pMin = math.min(pMin, p);
+                pMax = math.max(pMax, p);
+            }
+
+            var srcCenter = (pMin + pMax) * 0.5f;
+            var srcExt = (pMax - pMin) * 0.5f;
+            srcExt.x = math.max(srcExt.x, 1e-6f);
+            srcExt.y = math.max(srcExt.y, 1e-6f);
+            var dstCenter = (innerMin + innerMax) * 0.5f;
+            var dstExt = (innerMax - innerMin) * 0.5f;
+            var scale = math.min(dstExt.x / srcExt.x, dstExt.y / srcExt.y);
+            for (var i = 0; i < buffer.Length; i++)
+            {
+                var sp = buffer[i];
+                sp.position = dstCenter + (sp.position - srcCenter) * scale;
+                buffer[i] = sp;
             }
         }
     }
