@@ -29,6 +29,7 @@ namespace ParticlesSimulation.Systems
             state.RequireForUpdate(query);
             state.RequireForUpdate<SimulationConfig>();
             state.RequireForUpdate<RigidComState>();
+            state.RequireForUpdate<SimulationWorldBounds>();
         }
 
         public void OnDestroy(ref SystemState state)
@@ -58,9 +59,10 @@ namespace ParticlesSimulation.Systems
             var cfg = SystemAPI.GetSingleton<SimulationConfig>();
             EnsureGridBuffers(cfg.maxParticles);
 
-            var grid = _spatialCells;
+            var grid = _spatialCells; 
             var deltaScratch = _pbfDeltaScratch;
             var com = SystemAPI.GetSingleton<RigidComState>();
+            var worldBounds = SystemAPI.GetSingleton<SimulationWorldBounds>();
 
             var coresRo = SystemAPI.GetComponentLookup<ParticleCore>(true);
             var fluidsRo = SystemAPI.GetComponentLookup<ParticleFluid>(true);
@@ -113,10 +115,6 @@ namespace ParticlesSimulation.Systems
                     }.ScheduleParallel(query, handle);
                 }
 
-                coresRo.Update(ref state);
-                fluidsRo.Update(ref state);
-                statesRo.Update(ref state);
-
                 handle = new ComputeLambdaJob
                 {
                     grid = grid,
@@ -129,10 +127,6 @@ namespace ParticlesSimulation.Systems
                     stiffness = cfg.stiffness,
                     uniformParticleMass = cfg.uniformParticleMass
                 }.ScheduleParallel(query, handle);
-
-                coresRo.Update(ref state);
-                fluidsRo.Update(ref state);
-                statesRo.Update(ref state);
 
                 handle = new AccumulatePbfDeltaJob
                 {
@@ -160,6 +154,8 @@ namespace ParticlesSimulation.Systems
                     shapeStiffness = cfg.rigidShapeStiffness
                 }.ScheduleParallel(query, handle);
             }
+
+            handle = new ClampPredictedToWorldBoundsJob { WorldBounds = worldBounds }.ScheduleParallel(query, handle);
 
             state.Dependency = handle;
         }
