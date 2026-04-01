@@ -10,7 +10,7 @@ namespace ParticlesSimulation.Systems
     /// ref ParticleCore writes under Entities safety rules; reintroduce via a double-buffer or IJobChunk if needed.
     /// </summary>
     [UpdateInGroup(typeof(ParticleSimulationGroup))]
-    [UpdateAfter(typeof(ParticlePbfLoopSystem))]
+    [UpdateAfter(typeof(ParticleSimulationClockSystem))]
     public partial struct IntegrationSystem : ISystem
     {
         private EntityQuery query;
