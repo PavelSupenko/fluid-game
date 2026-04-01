@@ -1,15 +1,54 @@
 using ParticlesSimulation.Components;
+using Unity.Mathematics;
+using Unity.Entities;
 using Unity.Burst;
 using Unity.Collections;
-using Unity.Entities;
 using Unity.Jobs;
-using Unity.Mathematics;
 using Unity.Rendering;
 using Unity.Transforms;
 
 namespace ParticlesSimulation.Jobs
 {
-    [BurstCompile]
+    [BurstCompile(FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard)]
+    [WithAll(typeof(ParticleSimulatedTag))]
+    internal partial struct IntegratePositionsJob : IJobEntity
+    {
+        public float invDt;
+        public SimulationWorldBounds WorldBounds;
+
+        public void Execute(ref ParticleCore core)
+        {
+            var pred = core.predictedPosition;
+            var pos = core.position;
+            if (WorldBounds.BoundsEnabled != 0)
+            {
+                var ext = WorldBounds.Max - WorldBounds.Min;
+                var margin = math.min(WorldBounds.Margin, math.max(0f, 0.49f * math.cmin(ext)));
+                var min = WorldBounds.Min + margin;
+                var max = WorldBounds.Max - margin;
+                pred = math.clamp(pred, min, max);
+            }
+
+            core.velocity = (pred - pos) * invDt;
+            core.position = pred;
+        }
+    }
+    
+    [BurstCompile(FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard)]
+    [WithAll(typeof(ParticleSimulatedTag))]
+    internal partial struct ApplyScalarFluidDampingJob : IJobEntity
+    {
+        public float damping;
+
+        public void Execute(ref ParticleCore core, in ParticleState state)
+        {
+            var fluidMask = math.select(0f, 1f, state.phase == ParticlePhase.Fluid);
+            var factor = math.lerp(1f, 1f - damping, fluidMask);
+            core.velocity *= factor;
+        }
+    }
+    
+        [BurstCompile]
     public struct SetupParticlesJob : IJobParallelFor
     {
         public EntityCommandBuffer.ParallelWriter CommandBuffer;
@@ -48,12 +87,8 @@ namespace ParticlesSimulation.Jobs
             CommandBuffer.SetComponent(index, e, new ParticleState
             {
                 phase = ParticlePhase.Fluid,
-                initialLocalPosition = local,
                 colorId = colorId
             });
-
-            CommandBuffer.SetComponent(index, e, default(GridHash));
-            CommandBuffer.SetComponent(index, e, new ParticleDrawColor { value = p.color });
 
             // Burst-compatible Gamma to Linear conversion
             var color = p.color;

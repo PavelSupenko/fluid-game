@@ -133,7 +133,6 @@ namespace ParticlesSimulation
         {
             singletonEntity = entityManager.CreateEntity();
             entityManager.AddComponentData(singletonEntity, new SpatialGridMapTag());
-            entityManager.AddComponentData(singletonEntity, new RigidComState { center = float2.zero, count = 0 });
 
             var maxEstimate = 1;
             if (_imageToFluid != null)
@@ -149,14 +148,14 @@ namespace ParticlesSimulation
                 maxEstimate = _fallbackGridX * _fallbackGridY;
             }
 
-            var cfg = SimulationConfigUtility.CreateDefault(maxEstimate);
+            var cfg = ConfigUtility.CreateDefault(maxEstimate);
             cfg.gravityY = _gravityY;
             cfg.meltLineY = _meltLineY;
             cfg.viscosityMultiplier = _viscosity;
             cfg.stiffness = _stiffness;
             cfg.rigidShapeStiffness = _rigidShapeStiffness;
             cfg.solverIterations = _solverIterations;
-            SimulationConfigUtility.ApplySmoothingRadius(ref cfg, _smoothingRadius);
+            ConfigUtility.ApplySmoothingRadius(ref cfg, _smoothingRadius);
             cfg.deltaTime = Time.fixedDeltaTime > 0f ? Time.fixedDeltaTime : Time.deltaTime;
             cfg.maxParticles = math.max(cfg.maxParticles, maxEstimate + 256);
             cfg.uniformParticleMass = _particleMass;
@@ -201,7 +200,9 @@ namespace ParticlesSimulation
                         RemapSpawnBufferToInnerRect(buffer, innerMin, innerMax);
                 }
                 else
+                {
                     AppendFallbackGrid(buffer);
+                }
 
                 if (buffer.Length == 0)
                 {
@@ -218,9 +219,7 @@ namespace ParticlesSimulation
                     typeof(ParticleCore),
                     typeof(ParticleFluid),
                     typeof(ParticleState),
-                    typeof(GridHash),
-                    typeof(ParticleDrawColor),
-                    typeof(ParticleSimTag),
+                    typeof(ParticleSimulatedTag),
                     typeof(URPMaterialPropertyBaseColor),
                     typeof(LocalTransform));
 

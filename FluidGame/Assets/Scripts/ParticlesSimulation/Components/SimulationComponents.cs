@@ -4,6 +4,76 @@ using Unity.Mathematics;
 namespace ParticlesSimulation.Components
 {
     /// <summary>
+    /// Rigid particles preserve image structure via shape matching; fluid particles use PBF.
+    /// </summary>
+    public enum ParticlePhase : byte
+    {
+        Rigid = 0,
+        Fluid = 1
+    }
+    
+    /// <summary>
+    /// Core kinematic state (2D simulation uses xy; z unused).
+    /// </summary>
+    public struct ParticleCore : IComponentData
+    {
+        public float2 position;
+        public float2 predictedPosition;
+        public float2 velocity;
+        public float mass;
+    }
+
+    /// <summary>
+    /// Fluid samples: density/pressure each frame; rest density and mass are constants.
+    /// </summary>
+    public struct ParticleFluid : IComponentData
+    {
+        public float density;
+        public float pressure;
+        public float restDensity;
+        public float mass;
+        /// <summary>PBF Lagrange multiplier scratch for the current solver pass.</summary>
+        public float lambda;
+    }
+
+    /// <summary>
+    /// Phase, palette id, and rest pose for rigid shape matching (local to initial COM).
+    /// </summary>
+    public struct ParticleState : IComponentData
+    {
+        public ParticlePhase phase;
+        public byte colorId;
+    }
+
+    /// <summary>
+    /// Tags the particle simulation archetype for queries.
+    /// </summary>
+    public struct ParticleSimulatedTag : IComponentData
+    {
+    }
+
+    /// <summary>
+    /// Singleton tag for simulation bootstrap / bounds sync (spatial hash buffers live on <see cref="ParticlesSimulation.Systems.ParticlePbfLoopSystem"/>).
+    /// </summary>
+    public struct SpatialGridMapTag : IComponentData
+    {
+    }
+    
+    /// <summary>
+    /// Axis-aligned simulation region in world XY (singleton). When <see cref="BoundsEnabled"/> is non-zero,
+    /// particle positions are clamped inside the padded box each integration step.
+    /// </summary>
+    public struct SimulationWorldBounds : IComponentData
+    {
+        /// <summary>0 = disabled, 1 = clamp particles to the box.</summary>
+        public byte BoundsEnabled;
+        public float2 Min;
+        public float2 Max;
+        /// <summary>Inward inset applied to Min/Max when clamping (world units).</summary>
+        public float Margin;
+    }
+    
+    /// <summary>
     /// Global simulation parameters (singleton component on a dedicated entity).
     /// </summary>
     public struct SimulationConfig : IComponentData
@@ -26,8 +96,8 @@ namespace ParticlesSimulation.Components
         /// <summary>Neighbor kernel mass in density/lambda jobs (must match per-particle mass if uniform).</summary>
         public float uniformParticleMass;
     }
-
-    public static class SimulationConfigUtility
+    
+    public static class ConfigUtility
     {
         public static SimulationConfig CreateDefault(int maxParticles)
         {
