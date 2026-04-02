@@ -1,0 +1,3 @@
+<linker>
+	<assembly fullname="MCK" preserve="all"/>
+</linker>

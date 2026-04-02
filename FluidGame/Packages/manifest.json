@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "jp.hadashikick.vcontainer": "1.16.8",
     "com.unity.collab-proxy": "2.12.4",
     "com.unity.entities": "1.4.5",
     "com.unity.entities.graphics": "1.4.18",
@@ -47,5 +48,27 @@
     "com.unity.modules.vr": "1.0.0",
     "com.unity.modules.wind": "1.0.0",
     "com.unity.modules.xr": "1.0.0"
-  }
+  },
+  "scopedRegistries": [
+    {
+      "name": "package.openupm.com",
+      "url": "https://package.openupm.com",
+      "scopes": [
+        "jp.hadashikick.vcontainer",
+        "com.cysharp",
+        "com.coffee.ui-particle",
+        "com.google",
+        "com.google.play.common",
+        "com.google.play.core",
+        "com.google.play.review"
+      ]
+    },
+    {
+      "name": "Wingplay UPM",
+      "url": "https://upm.checkblocks.co",
+      "scopes": [
+        "wingplay"
+      ]
+    }
+  ]
 }
