@@ -278,7 +278,9 @@ namespace ParticlesSimulation
                     CommandBuffer = commandBuffer.AsParallelWriter(),
                     CenterOfMass = centerOfMass,
                     RestDensity = spawnConfig.restDensity,
-                    QuadScale = _quadHalfExtent * 2f
+                    QuadScale = _quadHalfExtent * 2f,
+                    PositionJitter = _fallbackSpacing * 0.02f,
+                    RandomSeed = 42u
                 };
 
                 setupJob.Schedule(buffer.Length, 64).Complete();

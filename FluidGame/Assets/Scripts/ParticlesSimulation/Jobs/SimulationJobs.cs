@@ -82,6 +82,9 @@ namespace ParticlesSimulation.Jobs
         public float2 CenterOfMass;
         public float RestDensity;
         public float QuadScale;
+        /// <summary>Maximum random offset per axis to break grid symmetry (e.g., 0.01).</summary>
+        public float PositionJitter;
+        public uint RandomSeed;
 
         public void Execute(int index)
         {
@@ -90,10 +93,19 @@ namespace ParticlesSimulation.Jobs
             // NOTE: CenterOfMass is kept for future rigid shape-matching (rest pose = p.position - CenterOfMass).
             var colorId = (byte)math.min(p.colorIndex, 7);
 
+            // Small deterministic jitter to break grid-aligned symmetry.
+            // Without this, particles in a regular grid preserve column structure indefinitely.
+            var position = p.position;
+            if (PositionJitter > 0f)
+            {
+                var rng = Unity.Mathematics.Random.CreateFromIndex(RandomSeed + (uint)index);
+                position += rng.NextFloat2(-PositionJitter, PositionJitter);
+            }
+
             CommandBuffer.SetComponent(index, e, new ParticleCore
             {
-                position = p.position,
-                predictedPosition = p.position,
+                position = position,
+                predictedPosition = position,
                 velocity = float2.zero
             });
 
@@ -130,7 +142,7 @@ namespace ParticlesSimulation.Jobs
             });
 
             CommandBuffer.SetComponent(index, e, LocalTransform.FromPositionRotationScale(
-                new float3(p.position.x, p.position.y, 0f),
+                new float3(position.x, position.y, 0f),
                 quaternion.identity,
                 QuadScale));
         }

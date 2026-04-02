@@ -107,8 +107,18 @@ namespace ParticlesSimulation.Jobs
             var cell = SpatialHash.CellCoords(position, CellSizeInverse);
             var inverseRestDensity = math.rcp(RestDensity);
 
-            // PBF constraint: C = ρ/ρ₀ − 1
-            var constraint = density * inverseRestDensity - 1f;
+            // One-sided PBF constraint: C = max(0, ρ/ρ₀ − 1).
+            // Only resist compression (ρ > ρ₀), not tension (ρ < ρ₀).
+            // This prevents boundary particles from accumulating artificial pressure
+            // due to missing neighbors beyond the wall.
+            var constraint = math.max(0f, density * inverseRestDensity - 1f);
+
+            // Under-dense particles need no correction — skip the expensive gradient loop.
+            if (constraint <= 0f)
+            {
+                Lambdas[index] = 0f;
+                return;
+            }
 
             // Accumulate |∇_{pₖ} Cᵢ|² for the denominator.
             var gradientSumSelf = float2.zero;
