@@ -52,19 +52,19 @@ namespace ParticlesSimulation.Systems
 
             state.Dependency = new Jobs.PredictPositionsJob
             {
-                dt = cfg.deltaTime,
-                gravity = new float2(0f, cfg.gravityY)
+                DeltaTime = cfg.deltaTime,
+                Gravity = new float2(0f, cfg.gravityY)
             }.ScheduleParallel(_query, state.Dependency);
         }
     }
 
     /// <summary>
     /// Finalizes velocity from constrained predictions, commits positions, then applies light fluid damping.
-    /// Pipeline: Clock → Prediction → [future PBF solver] → <b>Finalization</b>.
+    /// Pipeline: Clock → Prediction → SpatialHash → [PBF solver] → <b>Finalization</b>.
     /// </summary>
     [BurstCompile]
     [UpdateInGroup(typeof(ParticleSimulationGroup))]
-    [UpdateAfter(typeof(PredictionSystem))]
+    [UpdateAfter(typeof(SpatialHashGridSystem))]
     public partial struct FinalizationSystem : ISystem
     {
         private EntityQuery _query;
@@ -83,21 +83,21 @@ namespace ParticlesSimulation.Systems
         [BurstCompile]
         public void OnUpdate(ref SystemState state)
         {
-            var cfg = SystemAPI.GetSingleton<SimulationConfig>();
-            var invDt = math.rcp(cfg.deltaTime);
+            var config = SystemAPI.GetSingleton<SimulationConfig>();
+            var inverseDeltaTime = math.rcp(config.deltaTime);
             var bounds = SystemAPI.GetSingleton<SimulationWorldBounds>();
 
             var handle = state.Dependency;
 
             handle = new Jobs.FinalizePositionsJob
             {
-                invDt = invDt,
+                InverseDeltaTime = inverseDeltaTime,
                 WorldBounds = bounds
             }.ScheduleParallel(_query, handle);
 
             handle = new Jobs.ApplyScalarFluidDampingJob
             {
-                damping = math.saturate(cfg.viscosityMultiplier * cfg.deltaTime)
+                Damping = math.saturate(config.viscosityMultiplier * config.deltaTime)
             }.ScheduleParallel(_query, handle);
 
             state.Dependency = handle;
@@ -123,12 +123,12 @@ namespace ParticlesSimulation.Systems
         [BurstCompile]
         public void OnUpdate(ref SystemState state)
         {
-            foreach (var (particleCore, localTransform) in SystemAPI
+            foreach (var (core, lt) in SystemAPI
                          .Query<RefRO<ParticleCore>, RefRW<LocalTransform>>()
                          .WithAll<ParticleSimulatedTag>())
             {
-                float2 p = particleCore.ValueRO.position;
-                localTransform.ValueRW.Position = new float3(p.x, p.y, 0f);
+                float2 p = core.ValueRO.position;
+                lt.ValueRW.Position = new float3(p.x, p.y, 0f);
             }
         }
     }

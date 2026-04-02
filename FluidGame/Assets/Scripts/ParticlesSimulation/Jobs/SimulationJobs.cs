@@ -18,8 +18,8 @@ namespace ParticlesSimulation.Jobs
     [WithAll(typeof(ParticleSimulatedTag))]
     internal partial struct PredictPositionsJob : IJobEntity
     {
-        public float dt;
-        public float2 gravity;
+        public float DeltaTime;
+        public float2 Gravity;
 
         public void Execute(ref ParticleCore core, in ParticleState state)
         {
@@ -29,8 +29,8 @@ namespace ParticlesSimulation.Jobs
                 return;
             }
 
-            core.velocity += gravity * dt;
-            core.predictedPosition = core.position + core.velocity * dt;
+            core.velocity += Gravity * DeltaTime;
+            core.predictedPosition = core.position + core.velocity * DeltaTime;
         }
     }
 
@@ -38,23 +38,23 @@ namespace ParticlesSimulation.Jobs
     [WithAll(typeof(ParticleSimulatedTag))]
     internal partial struct FinalizePositionsJob : IJobEntity
     {
-        public float invDt;
+        public float InverseDeltaTime;
         public SimulationWorldBounds WorldBounds;
 
         public void Execute(ref ParticleCore core)
         {
-            var pred = core.predictedPosition;
-            var pos = core.position;
+            var predicted = core.predictedPosition;
+            var position = core.position;
             if (WorldBounds.BoundsEnabled != 0)
             {
                 var margin = BoundsUtility.EffectiveMargin(WorldBounds.Min, WorldBounds.Max, WorldBounds.Margin);
-                var min = WorldBounds.Min + margin;
-                var max = WorldBounds.Max - margin;
-                pred = math.clamp(pred, min, max);
+                var clampMin = WorldBounds.Min + margin;
+                var clampMax = WorldBounds.Max - margin;
+                predicted = math.clamp(predicted, clampMin, clampMax);
             }
 
-            core.velocity = (pred - pos) * invDt;
-            core.position = pred;
+            core.velocity = (predicted - position) * InverseDeltaTime;
+            core.position = predicted;
         }
     }
     
@@ -62,12 +62,12 @@ namespace ParticlesSimulation.Jobs
     [WithAll(typeof(ParticleSimulatedTag))]
     internal partial struct ApplyScalarFluidDampingJob : IJobEntity
     {
-        public float damping;
+        public float Damping;
 
         public void Execute(ref ParticleCore core, in ParticleState state)
         {
             var fluidMask = math.select(0f, 1f, state.phase == ParticlePhase.Fluid);
-            var factor = math.lerp(1f, 1f - damping, fluidMask);
+            var factor = math.lerp(1f, 1f - Damping, fluidMask);
             core.velocity *= factor;
         }
     }
@@ -117,10 +117,16 @@ namespace ParticlesSimulation.Jobs
                 math.pow((sRGB + 0.055f) / 1.055f, 2.4f),
                 sRGB / 12.92f,
                 sRGB <= 0.04045f);
+            var linearColor = new float4(linearRGB, color.w);
 
             CommandBuffer.SetComponent(index, e, new URPMaterialPropertyBaseColor
             {
-                Value = new float4(linearRGB, color.w)
+                Value = linearColor
+            });
+
+            CommandBuffer.SetComponent(index, e, new ParticleOriginalColor
+            {
+                Value = linearColor
             });
 
             CommandBuffer.SetComponent(index, e, LocalTransform.FromPositionRotationScale(

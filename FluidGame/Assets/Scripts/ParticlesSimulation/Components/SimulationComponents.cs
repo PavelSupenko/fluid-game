@@ -53,7 +53,16 @@ namespace ParticlesSimulation.Components
     }
 
     /// <summary>
-    /// Singleton tag for simulation bootstrap / bounds sync (spatial hash buffers live on <see cref="ParticlesSimulation.Systems.ParticlePbfLoopSystem"/>).
+    /// Stores the original spawn/image color so debug visualization can restore it.
+    /// Value is in linear color space (same as <see cref="Unity.Rendering.URPMaterialPropertyBaseColor"/>).
+    /// </summary>
+    public struct ParticleOriginalColor : IComponentData
+    {
+        public float4 Value;
+    }
+
+    /// <summary>
+    /// Singleton tag for simulation bootstrap and bounds sync.
     /// </summary>
     public struct SpatialGridMapTag : IComponentData
     {

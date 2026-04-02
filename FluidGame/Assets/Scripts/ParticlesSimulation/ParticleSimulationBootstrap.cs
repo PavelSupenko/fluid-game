@@ -114,7 +114,7 @@ namespace ParticlesSimulation
             var world = World.DefaultGameObjectInjectionWorld;
             if (world == null || !world.IsCreated)
             {
-                Debug.LogError("[ParticleSimulationBootstrap] Default ECS world not available.");
+                UnityEngine.Debug.LogError("[ParticleSimulationBootstrap] Default ECS world not available.");
                 return;
             }
 
@@ -185,7 +185,7 @@ namespace ParticlesSimulation
 
             if (_particleMaterial == null)
             {
-                Debug.LogError(
+                UnityEngine.Debug.LogError(
                     "[ParticleSimulationBootstrap] No particle material assigned - cannot spawn entities with graphics components.");
                 return;
             }
@@ -206,7 +206,7 @@ namespace ParticlesSimulation
 
                 if (buffer.Length == 0)
                 {
-                    Debug.LogWarning("[ParticleSimulationBootstrap] No particles spawned.");
+                    UnityEngine.Debug.LogWarning("[ParticleSimulationBootstrap] No particles spawned.");
                     return;
                 }
 
@@ -220,6 +220,7 @@ namespace ParticlesSimulation
                     typeof(ParticleFluid),
                     typeof(ParticleState),
                     typeof(ParticleSimulatedTag),
+                    typeof(ParticleOriginalColor),
                     typeof(URPMaterialPropertyBaseColor),
                     typeof(LocalTransform));
 
