@@ -173,7 +173,7 @@ namespace ParticlesSimulation
             }
 
             // Spacing so that gridX × gridY particles fit inside the inner rect.
-            var spacing = math.min(innerSize.x / gridX, innerSize.y / gridY) * 0.8f;
+            var spacing = math.min(innerSize.x / gridX, innerSize.y / gridY);// * 0.8f;
             _resolvedSpacing = spacing;
 
             // Visual size: slightly smaller than spacing so particles don't overlap.

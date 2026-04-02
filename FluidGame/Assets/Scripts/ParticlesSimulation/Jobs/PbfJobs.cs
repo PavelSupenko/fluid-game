@@ -97,6 +97,8 @@ namespace ParticlesSimulation.Jobs
         public float RestDensity;
         public float ParticleMass;
         public float Epsilon;
+        /// <summary>Cap on the constraint value to limit solver response under deep compression.</summary>
+        public float MaxConstraint;
 
         [WriteOnly] public NativeArray<float> Lambdas;
 
@@ -107,11 +109,12 @@ namespace ParticlesSimulation.Jobs
             var cell = SpatialHash.CellCoords(position, CellSizeInverse);
             var inverseRestDensity = math.rcp(RestDensity);
 
-            // One-sided PBF constraint: C = max(0, ρ/ρ₀ − 1).
-            // Only resist compression (ρ > ρ₀), not tension (ρ < ρ₀).
-            // This prevents boundary particles from accumulating artificial pressure
-            // due to missing neighbors beyond the wall.
-            var constraint = math.max(0f, density * inverseRestDensity - 1f);
+            // One-sided PBF constraint: C = max(0, ρ/ρ₀ − 1), clamped to MaxConstraint.
+            // One-sided: only resist compression (ρ > ρ₀), not tension (ρ < ρ₀).
+            // Clamped: limits solver response to deep compression (hydrostatic pressure).
+            // Without the clamp, bottom of a 64-layer column creates corrections that move
+            // particles multiple spacings per frame, destabilizing the simulation.
+            var constraint = math.clamp(density * inverseRestDensity - 1f, 0f, MaxConstraint);
 
             // Under-dense particles need no correction — skip the expensive gradient loop.
             if (constraint <= 0f)
