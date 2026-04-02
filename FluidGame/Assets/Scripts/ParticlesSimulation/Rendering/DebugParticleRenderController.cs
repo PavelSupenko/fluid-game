@@ -240,7 +240,7 @@ namespace ParticlesSimulation.Debug
             _spatialHashSystem = World.GetExistingSystemManaged<SpatialHashGridSystem>();
 
             _particleQuery = SystemAPI.QueryBuilder()
-                .WithAll<ParticleCore, ParticleState, ParticleSimulatedTag,
+                .WithAll<ParticleCore, ParticleFluid, ParticleState, ParticleSimulatedTag,
                          URPMaterialPropertyBaseColor, ParticleOriginalColor>()
                 .Build();
 
