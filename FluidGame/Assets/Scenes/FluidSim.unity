@@ -338,7 +338,7 @@ MonoBehaviour:
   sourceImage: {fileID: 2800000, guid: 11f59c4643cc3334994b5009abd2bec6, type: 3}
   targetColorCount: 8
   minColorPercentage: 5
-  resolution: 40
+  resolution: 5
   uniformDensity: 2
   uniformViscosity: 6
   uniformCohesion: 1
@@ -379,16 +379,17 @@ MonoBehaviour:
   _fallbackSpacing: 0.08
   _smoothingRadius: 0.12
   _meltLineY: -1.2
-  _gravityY: -1
+  _gravityY: -12
   _viscosity: 0.35
-  _stiffness: 0.85
+  _stiffness: 0.3
   _rigidShapeStiffness: 0.65
-  _solverIterations: 2
+  _solverIterations: 5
   _particleMass: 1
-  _restDensity: 200
+  _restDensity: 300
+  _autoEstimateRestDensity: 1
   _particleMaterial: {fileID: 2100000, guid: fdd1a38c5dd934d2487ea31e043e902f, type: 2}
   _quadMesh: {fileID: 0}
-  _quadHalfExtent: 0.1
+  _quadHalfExtent: 0.035
   _renderingLayer: 0
 --- !u!114 &607794431
 MonoBehaviour:
@@ -519,7 +520,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ParticlesSimulation.ParticleSimulationBounds
   _areaRect: {fileID: 783466178}
-  _margin: 0
+  _margin: 0.5
   _syncEachFrame: 1
 --- !u!224 &783466178
 RectTransform:
@@ -537,8 +538,8 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: -0, y: 1.8841}
-  m_SizeDelta: {x: 4.5615, y: 5.7681}
+  m_AnchoredPosition: {x: 0, y: 1}
+  m_SizeDelta: {x: 4.1687, y: 5.7681}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!1 &2132045519
 GameObject:

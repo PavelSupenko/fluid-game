@@ -93,6 +93,7 @@ namespace ParticlesSimulation.Components
         public float cellSizeInv;
         public float meltLineY;
         public float viscosityMultiplier;
+        /// <summary>PBD stiffness applied to position corrections (0..1). Scaled by 1/solverIterations internally.</summary>
         public float stiffness;
         public float rigidShapeStiffness;
         public float deltaTime;
@@ -105,6 +106,14 @@ namespace ParticlesSimulation.Components
         public float restDensity;
         /// <summary>Neighbor kernel mass in density/lambda jobs (must match per-particle mass if uniform).</summary>
         public float uniformParticleMass;
+        /// <summary>Maximum correction per iteration as a fraction of smoothingRadius (prevents overshoot).</summary>
+        public float maxCorrectionFraction;
+        /// <summary>Strength of artificial pressure to prevent surface particle clustering (k term).</summary>
+        public float artificialPressureStrength;
+        /// <summary>Exponent for artificial pressure falloff (n term, typically 4).</summary>
+        public float artificialPressureExponent;
+        /// <summary>Reference distance for artificial pressure as fraction of smoothing radius (Δq/h).</summary>
+        public float artificialPressureRadius;
     }
     
     public static class ConfigUtility
@@ -127,16 +136,20 @@ namespace ParticlesSimulation.Components
                 cellSizeInv = 1f / h,
                 meltLineY = -1.2f,
                 viscosityMultiplier = 0.35f,
-                stiffness = 0.8f,
+                stiffness = 0.5f,
                 rigidShapeStiffness = 0.65f,
                 deltaTime = 1f / 60f,
                 poly6Coefficient = poly6,
                 spikyGradCoefficient = spikyGrad,
-                solverIterations = 2,
+                solverIterations = 4,
                 maxParticles = math.max(1024, maxParticles),
                 pbfEpsilon = 120f,
                 restDensity = 300f,
-                uniformParticleMass = 1f
+                uniformParticleMass = 1f,
+                maxCorrectionFraction = 0.4f,
+                artificialPressureStrength = 0.1f,
+                artificialPressureExponent = 4f,
+                artificialPressureRadius = 0.2f
             };
         }
 
@@ -152,6 +165,41 @@ namespace ParticlesSimulation.Components
             c.cellSizeInv = 1f / h;
             c.poly6Coefficient = poly6;
             c.spikyGradCoefficient = spikyGrad;
+        }
+
+        /// <summary>
+        /// Estimates rest density for a regular 2D grid packing.
+        /// Call after <see cref="ApplySmoothingRadius"/> so kernel coefficients are up to date.
+        /// </summary>
+        public static float EstimateRestDensity(in SimulationConfig config, float particleSpacing)
+        {
+            var h2 = config.smoothingRadiusSq;
+            var poly6 = config.poly6Coefficient;
+            var mass = config.uniformParticleMass;
+            
+            // Self-contribution
+            var density = mass * poly6 * h2 * h2 * h2;
+
+            // Scan a grid neighborhood within smoothing radius
+            var maxCells = (int)math.ceil(config.smoothingRadius / particleSpacing) + 1;
+            for (var dy = -maxCells; dy <= maxCells; dy++)
+            {
+                for (var dx = -maxCells; dx <= maxCells; dx++)
+                {
+                    if (dx == 0 && dy == 0)
+                        continue;
+
+                    var distSq = (dx * particleSpacing) * (dx * particleSpacing)
+                                 + (dy * particleSpacing) * (dy * particleSpacing);
+                    if (distSq >= h2)
+                        continue;
+
+                    var diff = h2 - distSq;
+                    density += mass * poly6 * diff * diff * diff;
+                }
+            }
+
+            return density;
         }
     }
     

@@ -65,7 +65,7 @@ namespace ParticlesSimulation
 
         [FormerlySerializedAs("stiffness")]
         [SerializeField]
-        private float _stiffness = 0.85f;
+        private float _stiffness = 0.5f;
 
         [FormerlySerializedAs("rigidShapeStiffness")]
         [SerializeField]
@@ -73,15 +73,21 @@ namespace ParticlesSimulation
 
         [FormerlySerializedAs("solverIterations")]
         [SerializeField]
-        private int _solverIterations = 2;
+        private int _solverIterations = 4;
 
         [FormerlySerializedAs("particleMass")]
         [SerializeField]
         private float _particleMass = 1f;
 
         [FormerlySerializedAs("restDensity")]
+        [Tooltip("Manual rest density. Ignored when Auto Estimate is enabled.")]
         [SerializeField]
         private float _restDensity = 300;
+
+        [Tooltip("Automatically compute rest density from particle spacing and smoothing radius. " +
+                 "Recommended for stable simulation without manual tuning.")]
+        [SerializeField]
+        private bool _autoEstimateRestDensity = true;
 
         [FormerlySerializedAs("dynamicRenderer")]
         [Header("Entities Graphics (URP)")]
@@ -159,7 +165,16 @@ namespace ParticlesSimulation
             cfg.deltaTime = Time.fixedDeltaTime > 0f ? Time.fixedDeltaTime : Time.deltaTime;
             cfg.maxParticles = math.max(cfg.maxParticles, maxEstimate + 256);
             cfg.uniformParticleMass = _particleMass;
-            cfg.restDensity = _restDensity;
+            if (_autoEstimateRestDensity)
+            {
+                cfg.restDensity = ConfigUtility.EstimateRestDensity(in cfg, _fallbackSpacing);
+                UnityEngine.Debug.Log($"[ParticleSimulationBootstrap] Auto-estimated restDensity = {cfg.restDensity:F1} " +
+                                      $"(spacing={_fallbackSpacing}, h={_smoothingRadius})");
+            }
+            else
+            {
+                cfg.restDensity = _restDensity;
+            }
 
             entityManager.AddComponentData(singletonEntity, cfg);
 
@@ -253,13 +268,16 @@ namespace ParticlesSimulation
 
                 using var commandBuffer = new EntityCommandBuffer(Allocator.TempJob);
 
+                // Use the config's restDensity which may have been auto-estimated.
+                var spawnConfig = entityManager.GetComponentData<SimulationConfig>(singletonEntity);
+
                 var setupJob = new SetupParticlesJob
                 {
                     Entities = entities,
                     Buffer = buffer.AsArray(),
                     CommandBuffer = commandBuffer.AsParallelWriter(),
                     CenterOfMass = centerOfMass,
-                    RestDensity = _restDensity,
+                    RestDensity = spawnConfig.restDensity,
                     QuadScale = _quadHalfExtent * 2f
                 };
 
