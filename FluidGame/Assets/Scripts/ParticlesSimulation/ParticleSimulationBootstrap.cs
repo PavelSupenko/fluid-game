@@ -159,6 +159,7 @@ namespace ParticlesSimulation
             cfg.deltaTime = Time.fixedDeltaTime > 0f ? Time.fixedDeltaTime : Time.deltaTime;
             cfg.maxParticles = math.max(cfg.maxParticles, maxEstimate + 256);
             cfg.uniformParticleMass = _particleMass;
+            cfg.restDensity = _restDensity;
 
             entityManager.AddComponentData(singletonEntity, cfg);
 

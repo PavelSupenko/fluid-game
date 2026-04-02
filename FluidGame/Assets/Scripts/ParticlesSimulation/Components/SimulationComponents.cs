@@ -101,6 +101,8 @@ namespace ParticlesSimulation.Components
         public int solverIterations;
         public int maxParticles;
         public float pbfEpsilon;
+        /// <summary>Rest density target for the PBF constraint (ρ/ρ₀ − 1 = 0).</summary>
+        public float restDensity;
         /// <summary>Neighbor kernel mass in density/lambda jobs (must match per-particle mass if uniform).</summary>
         public float uniformParticleMass;
     }
@@ -114,7 +116,8 @@ namespace ParticlesSimulation.Components
             var h8 = h2 * h2 * h2 * h2;
             var poly6 = 4f / (math.PI * h8);
             var h5 = h * h * h * h * h;
-            var spiky = -10f / (math.PI * h5);
+            // 2D Spiky kernel gradient: ∇W = −(30/πh⁵)·(h−r)²·r̂
+            var spikyGrad = -30f / (math.PI * h5);
 
             return new SimulationConfig
             {
@@ -128,10 +131,11 @@ namespace ParticlesSimulation.Components
                 rigidShapeStiffness = 0.65f,
                 deltaTime = 1f / 60f,
                 poly6Coefficient = poly6,
-                spikyGradCoefficient = spiky,
+                spikyGradCoefficient = spikyGrad,
                 solverIterations = 2,
                 maxParticles = math.max(1024, maxParticles),
                 pbfEpsilon = 120f,
+                restDensity = 300f,
                 uniformParticleMass = 1f
             };
         }
@@ -142,12 +146,12 @@ namespace ParticlesSimulation.Components
             var h8 = h2 * h2 * h2 * h2;
             var poly6 = 4f / (math.PI * h8);
             var h5 = h * h * h * h * h;
-            var spiky = -10f / (math.PI * h5);
+            var spikyGrad = -30f / (math.PI * h5);
             c.smoothingRadius = h;
             c.smoothingRadiusSq = h2;
             c.cellSizeInv = 1f / h;
             c.poly6Coefficient = poly6;
-            c.spikyGradCoefficient = spiky;
+            c.spikyGradCoefficient = spikyGrad;
         }
     }
     

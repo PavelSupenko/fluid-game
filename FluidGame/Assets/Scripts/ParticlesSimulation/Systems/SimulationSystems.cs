@@ -60,11 +60,11 @@ namespace ParticlesSimulation.Systems
 
     /// <summary>
     /// Finalizes velocity from constrained predictions, commits positions, then applies light fluid damping.
-    /// Pipeline: Clock → Prediction → SpatialHash → [PBF solver] → <b>Finalization</b>.
+    /// Pipeline: Clock → Prediction → SpatialHash → PBF Solver → <b>Finalization</b>.
     /// </summary>
     [BurstCompile]
     [UpdateInGroup(typeof(ParticleSimulationGroup))]
-    [UpdateAfter(typeof(SpatialHashGridSystem))]
+    [UpdateAfter(typeof(PbfSolverSystem))]
     public partial struct FinalizationSystem : ISystem
     {
         private EntityQuery _query;
