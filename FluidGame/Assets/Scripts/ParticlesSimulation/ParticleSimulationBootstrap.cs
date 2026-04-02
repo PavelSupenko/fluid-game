@@ -28,18 +28,25 @@ namespace ParticlesSimulation
         [SerializeField]
         private ParticleSimulationBounds _simulationBounds;
 
-        [Header("Fallback grid (no image)")]
+        [Header("Particle grid")]
         [SerializeField]
-        private int _fallbackGridX = 32;
+        private int _gridX = 32;
 
         [SerializeField]
-        private int _fallbackGridY = 48;
+        private int _gridY = 48;
 
+        [Tooltip("Manual particle spacing (used when Auto Fit is off or no bounds assigned).")]
+        [SerializeField]
+        private float _particleSpacing = 0.08f;
+
+        [Tooltip("When enabled and Simulation Bounds is assigned, spacing and visual size " +
+                 "are computed automatically from the container dimensions and grid resolution.")]
+        [SerializeField]
+        private bool _autoFitToContainer = true;
+
+        [Tooltip("Spawn origin when no Simulation Bounds is assigned.")]
         [SerializeField]
         private float2 _fallbackOrigin = new float2(-1.6f, -2.2f);
-
-        [SerializeField]
-        private float _fallbackSpacing = 0.08f;
 
         [Header("Simulation tuning")]
         [SerializeField]
@@ -87,6 +94,7 @@ namespace ParticlesSimulation
         [SerializeField]
         private Mesh _quadMesh;
 
+        [Tooltip("Manual quad half extent. Ignored when Auto Fit To Container is enabled.")]
         [SerializeField]
         private float _quadHalfExtent = 0.035f;
 
@@ -97,6 +105,11 @@ namespace ParticlesSimulation
         private Entity singletonEntity;
         private bool spawned;
         private Mesh _runtimeQuadMesh;
+
+        // Resolved at Awake — may be auto-computed from container dimensions.
+        private float _resolvedSpacing;
+        private float _resolvedQuadHalfExtent;
+        private float _resolvedSmoothingRadius;
 
         private void Awake()
         {
@@ -110,9 +123,70 @@ namespace ParticlesSimulation
                 return;
             }
 
+            ResolveSpacingAndVisualSize();
+
             entityManager = world.EntityManager;
             CreateSingletons();
             SpawnParticles();
+        }
+
+        /// <summary>
+        /// Computes effective particle spacing and visual quad size.
+        /// When <see cref="_autoFitToContainer"/> is enabled and bounds exist,
+        /// values are derived from the container inner rect and grid resolution.
+        /// </summary>
+        private void ResolveSpacingAndVisualSize()
+        {
+            _resolvedSpacing = _particleSpacing;
+            _resolvedQuadHalfExtent = _quadHalfExtent;
+            _resolvedSmoothingRadius = _smoothingRadius;
+
+            if (!_autoFitToContainer || _simulationBounds == null || _simulationBounds.AreaRect == null)
+                return;
+
+            if (!RectTransformSimulationBoundsUtility.TryGetWorldAabbXY(
+                    _simulationBounds.AreaRect, out var wMin, out var wMax))
+                return;
+
+            ComputeInnerClampBox(wMin, wMax, _simulationBounds.Margin, out var innerMin, out var innerMax);
+            var innerSize = innerMax - innerMin;
+
+            if (innerSize.x <= 0f || innerSize.y <= 0f)
+                return;
+
+            var gridX = math.max(1, _gridX);
+            var gridY = math.max(1, _gridY);
+
+            // Determine the dominant grid dimension.
+            // If an image source is present, use its particle count to estimate grid.
+            if (_imageToFluid != null)
+            {
+                _imageToFluid.TryParseImage();
+                if (_imageToFluid.IsReady)
+                {
+                    var totalParticles = _imageToFluid.GeneratedParticleCount;
+                    // Estimate a square-ish grid for spacing purposes.
+                    var aspect = innerSize.x / innerSize.y;
+                    gridY = math.max(1, (int)math.sqrt(totalParticles / aspect));
+                    gridX = math.max(1, totalParticles / gridY);
+                }
+            }
+
+            // Spacing so that gridX × gridY particles fit inside the inner rect.
+            var spacing = math.min(innerSize.x / gridX, innerSize.y / gridY) * 0.8f;
+            _resolvedSpacing = spacing;
+
+            // Visual size: slightly smaller than spacing so particles don't overlap.
+            _resolvedQuadHalfExtent = spacing * 0.45f;
+
+            // Smoothing radius must scale with spacing so particles see enough neighbors.
+            // Ratio of 1.5 gives ~8 neighbors in a 2D grid (all direct + diagonal).
+            _resolvedSmoothingRadius = spacing * 1.5f;
+
+            UnityEngine.Debug.Log($"[ParticleSimulationBootstrap] Auto-fit: spacing={_resolvedSpacing:F4}, " +
+                                  $"quadHalfExtent={_resolvedQuadHalfExtent:F4}, " +
+                                  $"smoothingRadius={_resolvedSmoothingRadius:F4} " +
+                                  $"(container={innerSize.x:F2}×{innerSize.y:F2}, grid={gridX}×{gridY})");
         }
 
         private void OnDestroy()
@@ -133,11 +207,11 @@ namespace ParticlesSimulation
                 if (_imageToFluid.IsReady)
                     maxEstimate = math.max(_imageToFluid.GeneratedParticleCount, 1);
                 else
-                    maxEstimate = _fallbackGridX * _fallbackGridY;
+                    maxEstimate = _gridX * _gridY;
             }
             else
             {
-                maxEstimate = _fallbackGridX * _fallbackGridY;
+                maxEstimate = _gridX * _gridY;
             }
 
             var cfg = ConfigUtility.CreateDefault(maxEstimate);
@@ -147,15 +221,15 @@ namespace ParticlesSimulation
             cfg.stiffness = _stiffness;
             cfg.rigidShapeStiffness = _rigidShapeStiffness;
             cfg.solverIterations = _solverIterations;
-            ConfigUtility.ApplySmoothingRadius(ref cfg, _smoothingRadius);
+            ConfigUtility.ApplySmoothingRadius(ref cfg, _resolvedSmoothingRadius);
             cfg.deltaTime = Time.fixedDeltaTime > 0f ? Time.fixedDeltaTime : Time.deltaTime;
             cfg.maxParticles = math.max(cfg.maxParticles, maxEstimate + 256);
             cfg.uniformParticleMass = _particleMass;
             if (_autoEstimateRestDensity)
             {
-                cfg.restDensity = ConfigUtility.EstimateRestDensity(in cfg, _fallbackSpacing);
+                cfg.restDensity = ConfigUtility.EstimateRestDensity(in cfg, _resolvedSpacing);
                 UnityEngine.Debug.Log($"[ParticleSimulationBootstrap] Auto-estimated restDensity = {cfg.restDensity:F1} " +
-                                      $"(spacing={_fallbackSpacing}, h={_smoothingRadius})");
+                                      $"(spacing={_resolvedSpacing}, h={_resolvedSmoothingRadius})");
             }
             else
             {
@@ -264,8 +338,8 @@ namespace ParticlesSimulation
                     CommandBuffer = commandBuffer.AsParallelWriter(),
                     CenterOfMass = centerOfMass,
                     RestDensity = spawnConfig.restDensity,
-                    QuadScale = _quadHalfExtent * 2f,
-                    PositionJitter = _fallbackSpacing * 0.02f,
+                    QuadScale = _resolvedQuadHalfExtent * 2f,
+                    PositionJitter = _resolvedSpacing * 0.02f,
                     RandomSeed = 42u
                 };
 
@@ -332,16 +406,16 @@ namespace ParticlesSimulation
             if (TryGetSpawnInnerRect(out var innerMin, out var innerMax))
             {
                 var size = innerMax - innerMin;
-                var nx = math.max(1, _fallbackGridX - 1);
-                var ny = math.max(1, _fallbackGridY - 1);
+                var nx = math.max(1, _gridX - 1);
+                var ny = math.max(1, _gridY - 1);
                 var spacingX = size.x / nx;
                 var spacingY = size.y / ny;
-                for (var y = 0; y < _fallbackGridY; y++)
+                for (var y = 0; y < _gridY; y++)
                 {
-                    for (var x = 0; x < _fallbackGridX; x++)
+                    for (var x = 0; x < _gridX; x++)
                     {
                         var pos = innerMin + new float2(x * spacingX, y * spacingY);
-                        var t = (float)(x + y) / math.max(1, _fallbackGridX + _fallbackGridY - 2);
+                        var t = (float)(x + y) / math.max(1, _gridX + _gridY - 2);
                         var col = Color.HSVToRGB(t, 0.65f, 0.95f);
                         buffer.Add(new SpawnParticle
                         {
@@ -355,12 +429,12 @@ namespace ParticlesSimulation
                 return;
             }
 
-            for (var y = 0; y < _fallbackGridY; y++)
+            for (var y = 0; y < _gridY; y++)
             {
-                for (var x = 0; x < _fallbackGridX; x++)
+                for (var x = 0; x < _gridX; x++)
                 {
-                    var pos = _fallbackOrigin + new float2(x * _fallbackSpacing, y * _fallbackSpacing);
-                    var t = (float)(x + y) / math.max(1, _fallbackGridX + _fallbackGridY - 2);
+                    var pos = _fallbackOrigin + new float2(x * _resolvedSpacing, y * _resolvedSpacing);
+                    var t = (float)(x + y) / math.max(1, _gridX + _gridY - 2);
                     var col = Color.HSVToRGB(t, 0.65f, 0.95f);
                     buffer.Add(new SpawnParticle
                     {

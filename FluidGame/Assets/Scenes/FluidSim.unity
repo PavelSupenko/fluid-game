@@ -371,12 +371,13 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ParticlesSimulation.ParticleSimulationBootstrap
   _imageToFluid: {fileID: 607794426}
   _simulationBounds: {fileID: 783466177}
-  _fallbackGridX: 32
-  _fallbackGridY: 48
+  _gridX: 32
+  _gridY: 48
+  _particleSpacing: 0.08
+  _autoFitToContainer: 1
   _fallbackOrigin:
     x: -1.6
     y: -2.2
-  _fallbackSpacing: 0.08
   _smoothingRadius: 0.12
   _meltLineY: -1.2
   _gravityY: -12
