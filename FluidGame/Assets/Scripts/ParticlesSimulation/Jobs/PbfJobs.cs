@@ -247,9 +247,10 @@ namespace ParticlesSimulation.Jobs
     }
 
     /// <summary>
-    /// Applies position corrections with PBD stiffness scaling and magnitude clamping.
-    /// Stiffness is pre-divided by solver iterations to ensure convergence.
-    /// MaxCorrection prevents overshoot when particles are close together.
+    /// Applies position corrections with PBD stiffness scaling, magnitude clamping,
+    /// and boundary enforcement. Boundary clamping during solver iteration prevents
+    /// corrections from pushing particles outside the container, which would create
+    /// large discrepancies for finalization to resolve.
     /// </summary>
     [BurstCompile]
     public struct ApplyPositionCorrectionJob : IJobParallelFor
@@ -260,6 +261,10 @@ namespace ParticlesSimulation.Jobs
         public float Stiffness;
         /// <summary>Maximum correction magnitude (typically fraction of smoothing radius).</summary>
         public float MaxCorrection;
+        /// <summary>Clamping bounds (already margin-adjusted). Zero = disabled.</summary>
+        public float2 BoundsMin;
+        public float2 BoundsMax;
+        public byte BoundsEnabled;
 
         public void Execute(int index)
         {
@@ -268,7 +273,12 @@ namespace ParticlesSimulation.Jobs
             if (magnitudeSq > MaxCorrection * MaxCorrection)
                 correction *= MaxCorrection * math.rsqrt(magnitudeSq);
 
-            Positions[index] += correction;
+            var position = Positions[index] + correction;
+
+            if (BoundsEnabled != 0)
+                position = math.clamp(position, BoundsMin, BoundsMax);
+
+            Positions[index] = position;
         }
     }
 

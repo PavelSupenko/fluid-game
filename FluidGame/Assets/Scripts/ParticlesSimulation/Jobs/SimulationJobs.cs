@@ -47,15 +47,34 @@ namespace ParticlesSimulation.Jobs
         {
             var predicted = core.predictedPosition;
             var position = core.position;
+
+            var atMinX = false;
+            var atMaxX = false;
+            var atMinY = false;
+            var atMaxY = false;
+
             if (WorldBounds.BoundsEnabled != 0)
             {
                 var margin = BoundsUtility.EffectiveMargin(WorldBounds.Min, WorldBounds.Max, WorldBounds.Margin);
                 var clampMin = WorldBounds.Min + margin;
                 var clampMax = WorldBounds.Max - margin;
+
+                atMinX = predicted.x <= clampMin.x;
+                atMaxX = predicted.x >= clampMax.x;
+                atMinY = predicted.y <= clampMin.y;
+                atMaxY = predicted.y >= clampMax.y;
+
                 predicted = math.clamp(predicted, clampMin, clampMax);
             }
 
             var velocity = (predicted - position) * InverseDeltaTime;
+
+            // Inelastic boundary: kill velocity component directed into the wall.
+            // For a thick viscous fluid, energy should be fully absorbed on contact.
+            if (atMinX && velocity.x < 0f) velocity.x = 0f;
+            if (atMaxX && velocity.x > 0f) velocity.x = 0f;
+            if (atMinY && velocity.y < 0f) velocity.y = 0f;
+            if (atMaxY && velocity.y > 0f) velocity.y = 0f;
 
             // Hard cap on velocity magnitude to prevent energy runaway.
             var speedSq = math.lengthsq(velocity);

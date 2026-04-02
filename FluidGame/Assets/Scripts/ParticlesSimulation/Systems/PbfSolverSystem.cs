@@ -41,11 +41,13 @@ namespace ParticlesSimulation.Systems
 
             RequireForUpdate(_particleQuery);
             RequireForUpdate<SimulationConfig>();
+            RequireForUpdate<SimulationWorldBounds>();
         }
 
         protected override void OnUpdate()
         {
             var config = SystemAPI.GetSingleton<SimulationConfig>();
+            var bounds = SystemAPI.GetSingleton<SimulationWorldBounds>();
             var particleCount = _spatialHashSystem.ParticleCount;
 
             if (particleCount == 0)
@@ -86,6 +88,17 @@ namespace ParticlesSimulation.Systems
             var iterations = math.max(1, config.solverIterations);
             var perIterationStiffness = math.saturate(config.stiffness) / iterations;
             var maxCorrection = config.maxCorrectionFraction * config.smoothingRadius;
+
+            // Precompute clamping bounds for in-solver boundary enforcement.
+            var solverBoundsEnabled = bounds.BoundsEnabled;
+            var solverBoundsMin = float2.zero;
+            var solverBoundsMax = float2.zero;
+            if (solverBoundsEnabled != 0)
+            {
+                var margin = BoundsUtility.EffectiveMargin(bounds.Min, bounds.Max, bounds.Margin);
+                solverBoundsMin = bounds.Min + margin;
+                solverBoundsMax = bounds.Max - margin;
+            }
 
             for (var iter = 0; iter < iterations; iter++)
             {
@@ -135,13 +148,16 @@ namespace ParticlesSimulation.Systems
                     Corrections = correctionSlice
                 }.Schedule(particleCount, 64, handle);
 
-                // 4. Apply Δp with stiffness scaling and magnitude clamping.
+                // 4. Apply Δp with stiffness scaling, magnitude clamping, and boundary enforcement.
                 handle = new ApplyPositionCorrectionJob
                 {
                     Positions = workingPositions,
                     Corrections = correctionSlice,
                     Stiffness = perIterationStiffness,
-                    MaxCorrection = maxCorrection
+                    MaxCorrection = maxCorrection,
+                    BoundsEnabled = solverBoundsEnabled,
+                    BoundsMin = solverBoundsMin,
+                    BoundsMax = solverBoundsMax
                 }.Schedule(particleCount, 128, handle);
             }
 
