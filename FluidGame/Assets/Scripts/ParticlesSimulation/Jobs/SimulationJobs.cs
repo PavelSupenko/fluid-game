@@ -9,6 +9,31 @@ using Unity.Transforms;
 
 namespace ParticlesSimulation.Jobs
 {
+    /// <summary>
+    /// Applies external forces (gravity) and writes predictedPosition for the solver.
+    /// Only <see cref="ParticlePhase.Fluid"/> particles are integrated;
+    /// all other phases keep predictedPosition == position (static until their system moves them).
+    /// </summary>
+    [BurstCompile(FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard)]
+    [WithAll(typeof(ParticleSimulatedTag))]
+    internal partial struct PredictPositionsJob : IJobEntity
+    {
+        public float dt;
+        public float2 gravity;
+
+        public void Execute(ref ParticleCore core, in ParticleState state)
+        {
+            if (state.phase != ParticlePhase.Fluid)
+            {
+                core.predictedPosition = core.position;
+                return;
+            }
+
+            core.velocity += gravity * dt;
+            core.predictedPosition = core.position + core.velocity * dt;
+        }
+    }
+
     [BurstCompile(FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard)]
     [WithAll(typeof(ParticleSimulatedTag))]
     internal partial struct FinalizePositionsJob : IJobEntity
@@ -75,7 +100,6 @@ namespace ParticlesSimulation.Jobs
             CommandBuffer.SetComponent(index, e, new ParticleFluid
             {
                 density = 0f,
-                pressure = 0f,
                 restDensity = RestDensity,
                 lambda = 0f
             });

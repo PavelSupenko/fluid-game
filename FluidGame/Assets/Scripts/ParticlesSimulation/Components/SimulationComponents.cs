@@ -24,13 +24,12 @@ namespace ParticlesSimulation.Components
     }
 
     /// <summary>
-    /// Fluid samples: density/pressure each frame; rest density is a constant.
+    /// Fluid PBF state: density is recomputed each frame; rest density is a per-particle constant.
     /// Per-particle mass lives in <see cref="SimulationConfig.uniformParticleMass"/>.
     /// </summary>
     public struct ParticleFluid : IComponentData
     {
         public float density;
-        public float pressure;
         public float restDensity;
         /// <summary>PBF Lagrange multiplier scratch for the current solver pass.</summary>
         public float lambda;
