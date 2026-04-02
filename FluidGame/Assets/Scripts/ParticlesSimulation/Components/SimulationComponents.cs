@@ -92,7 +92,8 @@ namespace ParticlesSimulation.Components
         public float smoothingRadiusSq;
         public float cellSizeInv;
         public float meltLineY;
-        public float viscosityMultiplier;
+        /// <summary>Per-frame fluid velocity damping (0 = no damping, 1 = full stop). NOT multiplied by dt.</summary>
+        public float fluidDamping;
         /// <summary>PBD stiffness applied to position corrections (0..1). Scaled by 1/solverIterations internally.</summary>
         public float stiffness;
         public float rigidShapeStiffness;
@@ -106,6 +107,8 @@ namespace ParticlesSimulation.Components
         public float restDensity;
         /// <summary>Neighbor kernel mass in density/lambda jobs (must match per-particle mass if uniform).</summary>
         public float uniformParticleMass;
+        /// <summary>Hard cap on particle speed (world units/s). Prevents catastrophic energy buildup.</summary>
+        public float maxSpeed;
         /// <summary>Maximum correction per iteration as a fraction of smoothingRadius (prevents overshoot).</summary>
         public float maxCorrectionFraction;
         /// <summary>Strength of artificial pressure to prevent surface particle clustering (k term).</summary>
@@ -135,7 +138,7 @@ namespace ParticlesSimulation.Components
                 smoothingRadiusSq = h2,
                 cellSizeInv = 1f / h,
                 meltLineY = -1.2f,
-                viscosityMultiplier = 0.35f,
+                fluidDamping = 0.3f,
                 stiffness = 0.5f,
                 rigidShapeStiffness = 0.65f,
                 deltaTime = 1f / 60f,
@@ -146,6 +149,7 @@ namespace ParticlesSimulation.Components
                 pbfEpsilon = 120f,
                 restDensity = 300f,
                 uniformParticleMass = 1f,
+                maxSpeed = 4f,
                 maxCorrectionFraction = 0.4f,
                 artificialPressureStrength = 0.1f,
                 artificialPressureExponent = 4f,

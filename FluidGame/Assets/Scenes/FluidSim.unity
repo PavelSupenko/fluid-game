@@ -338,7 +338,7 @@ MonoBehaviour:
   sourceImage: {fileID: 2800000, guid: 11f59c4643cc3334994b5009abd2bec6, type: 3}
   targetColorCount: 8
   minColorPercentage: 5
-  resolution: 16
+  resolution: 64
   uniformDensity: 2
   uniformViscosity: 6
   uniformCohesion: 1
@@ -380,7 +380,7 @@ MonoBehaviour:
   _smoothingRadius: 0.12
   _meltLineY: -1.2
   _gravityY: -12
-  _viscosity: 0.35
+  _fluidDamping: 0.3
   _stiffness: 0.5
   _rigidShapeStiffness: 0.65
   _solverIterations: 4

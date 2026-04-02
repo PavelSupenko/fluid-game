@@ -20,7 +20,6 @@ namespace ParticlesSimulation
     [DefaultExecutionOrder(-500)]
     public sealed class ParticleSimulationBootstrap : MonoBehaviour
     {
-        [FormerlySerializedAs("imageToFluid")]
         [Header("Sources (Core)")]
         [SerializeField]
         private ImageToFluid _imageToFluid;
@@ -29,57 +28,47 @@ namespace ParticlesSimulation
         [SerializeField]
         private ParticleSimulationBounds _simulationBounds;
 
-        [FormerlySerializedAs("fallbackGridX")]
         [Header("Fallback grid (no image)")]
         [SerializeField]
         private int _fallbackGridX = 32;
 
-        [FormerlySerializedAs("fallbackGridY")]
         [SerializeField]
         private int _fallbackGridY = 48;
 
-        [FormerlySerializedAs("fallbackOrigin")]
         [SerializeField]
         private float2 _fallbackOrigin = new float2(-1.6f, -2.2f);
 
-        [FormerlySerializedAs("fallbackSpacing")]
         [SerializeField]
         private float _fallbackSpacing = 0.08f;
 
-        [FormerlySerializedAs("smoothingRadius")]
         [Header("Simulation tuning")]
         [SerializeField]
         private float _smoothingRadius = 0.12f;
 
-        [FormerlySerializedAs("meltLineY")]
         [SerializeField]
         private float _meltLineY = -1.2f;
 
-        [FormerlySerializedAs("gravityY")]
         [SerializeField]
         private float _gravityY = -12f;
 
-        [FormerlySerializedAs("viscosity")]
+        [Tooltip("Per-frame velocity damping for fluid particles (0 = no damping, 1 = full stop). " +
+                 "Higher values = thicker fluid. 0.3 gives honey-like behavior.")]
+        [Range(0f, 1f)]
         [SerializeField]
-        private float _viscosity = 0.35f;
+        private float _fluidDamping = 0.3f;
 
-        [FormerlySerializedAs("stiffness")]
         [SerializeField]
         private float _stiffness = 0.5f;
 
-        [FormerlySerializedAs("rigidShapeStiffness")]
         [SerializeField]
         private float _rigidShapeStiffness = 0.65f;
 
-        [FormerlySerializedAs("solverIterations")]
         [SerializeField]
         private int _solverIterations = 4;
 
-        [FormerlySerializedAs("particleMass")]
         [SerializeField]
         private float _particleMass = 1f;
 
-        [FormerlySerializedAs("restDensity")]
         [Tooltip("Manual rest density. Ignored when Auto Estimate is enabled.")]
         [SerializeField]
         private float _restDensity = 300;
@@ -89,7 +78,6 @@ namespace ParticlesSimulation
         [SerializeField]
         private bool _autoEstimateRestDensity = true;
 
-        [FormerlySerializedAs("dynamicRenderer")]
         [Header("Entities Graphics (URP)")]
         [Tooltip("URP Lit/Unlit material that uses _BaseColor (Entities Graphics compatible).")]
         [SerializeField]
@@ -99,11 +87,9 @@ namespace ParticlesSimulation
         [SerializeField]
         private Mesh _quadMesh;
 
-        [FormerlySerializedAs("quadHalfExtent")]
         [SerializeField]
         private float _quadHalfExtent = 0.035f;
 
-        [FormerlySerializedAs("renderLayer")]
         [SerializeField]
         private int _renderingLayer;
 
@@ -157,7 +143,7 @@ namespace ParticlesSimulation
             var cfg = ConfigUtility.CreateDefault(maxEstimate);
             cfg.gravityY = _gravityY;
             cfg.meltLineY = _meltLineY;
-            cfg.viscosityMultiplier = _viscosity;
+            cfg.fluidDamping = _fluidDamping;
             cfg.stiffness = _stiffness;
             cfg.rigidShapeStiffness = _rigidShapeStiffness;
             cfg.solverIterations = _solverIterations;

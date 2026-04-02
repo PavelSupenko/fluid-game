@@ -39,6 +39,8 @@ namespace ParticlesSimulation.Jobs
     internal partial struct FinalizePositionsJob : IJobEntity
     {
         public float InverseDeltaTime;
+        public float MaxSpeedSq;
+        public float MaxSpeed;
         public SimulationWorldBounds WorldBounds;
 
         public void Execute(ref ParticleCore core)
@@ -53,7 +55,14 @@ namespace ParticlesSimulation.Jobs
                 predicted = math.clamp(predicted, clampMin, clampMax);
             }
 
-            core.velocity = (predicted - position) * InverseDeltaTime;
+            var velocity = (predicted - position) * InverseDeltaTime;
+
+            // Hard cap on velocity magnitude to prevent energy runaway.
+            var speedSq = math.lengthsq(velocity);
+            if (speedSq > MaxSpeedSq)
+                velocity *= MaxSpeed * math.rsqrt(speedSq);
+
+            core.velocity = velocity;
             core.position = predicted;
         }
     }

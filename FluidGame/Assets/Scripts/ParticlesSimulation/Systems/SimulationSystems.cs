@@ -92,12 +92,16 @@ namespace ParticlesSimulation.Systems
             handle = new Jobs.FinalizePositionsJob
             {
                 InverseDeltaTime = inverseDeltaTime,
+                MaxSpeed = config.maxSpeed,
+                MaxSpeedSq = config.maxSpeed * config.maxSpeed,
                 WorldBounds = bounds
             }.ScheduleParallel(_query, handle);
 
+            // fluidDamping is applied directly as a per-frame fraction (not scaled by dt).
+            // For thick viscous fluids, values of 0.2–0.5 give heavy, honey-like behavior.
             handle = new Jobs.ApplyScalarFluidDampingJob
             {
-                Damping = math.saturate(config.viscosityMultiplier * config.deltaTime)
+                Damping = math.saturate(config.fluidDamping)
             }.ScheduleParallel(_query, handle);
 
             state.Dependency = handle;
