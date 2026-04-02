@@ -1,0 +1,21 @@
+{
+    "name": "Services",
+    "rootNamespace": "MeltIt.Services",
+    "references": [
+        "UniTask",
+        "VContainer",
+        "Unity.InputSystem",
+        "MCK",
+        "UniTask.Addressables",
+        "Unity.TextMeshPro"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -1,0 +1,26 @@
+{
+    "name": "Features",
+    "rootNamespace": "MeltIt.Features",
+    "references": [
+        "VContainer",
+        "UniTask",
+        "Unity.TextMeshPro",
+        "Unity.InputSystem",
+        "UniTask.DOTween",
+        "Unity.2D.Tilemap.Extras",
+        "MCK",
+        "Unity.Burst",
+        "Unity.Collections",
+        "Unity.Mathematics",
+        "Services"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

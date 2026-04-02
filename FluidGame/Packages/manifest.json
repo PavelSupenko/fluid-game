@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "com.cysharp.unitask": "2.5.10",
     "jp.hadashikick.vcontainer": "1.16.8",
     "com.unity.collab-proxy": "2.12.4",
     "com.unity.entities": "1.4.5",
