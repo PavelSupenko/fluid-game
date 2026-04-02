@@ -3,7 +3,6 @@ using Unity.Mathematics;
 using Unity.Transforms;
 using Unity.Entities;
 using Unity.Burst;
-using UnityEngine;
 
 namespace ParticlesSimulation.Systems
 {
@@ -21,7 +20,7 @@ namespace ParticlesSimulation.Systems
         public void OnUpdate(ref SystemState state)
         {
             var cfg = SystemAPI.GetSingletonRW<SimulationConfig>();
-            cfg.ValueRW.deltaTime = math.min(Time.deltaTime, 1f / 20f);
+            cfg.ValueRW.deltaTime = math.min(SystemAPI.Time.DeltaTime, 1f / 20f);
         }
     }
     
@@ -81,7 +80,7 @@ namespace ParticlesSimulation.Systems
 
             var handle = state.Dependency;
 
-            handle = new Jobs.IntegratePositionsJob { invDt = invDt, WorldBounds = bounds }.ScheduleParallel(query, handle);
+            handle = new Jobs.FinalizePositionsJob { invDt = invDt, WorldBounds = bounds }.ScheduleParallel(query, handle);
 
             handle = new Jobs.ApplyScalarFluidDampingJob
             {

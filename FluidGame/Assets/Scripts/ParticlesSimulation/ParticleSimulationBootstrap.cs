@@ -254,10 +254,9 @@ namespace ParticlesSimulation
                 var setupJob = new SetupParticlesJob
                 {
                     Entities = entities,
-                    Buffer = buffer.AsDeferredJobArray(),
+                    Buffer = buffer.AsArray(),
                     CommandBuffer = commandBuffer.AsParallelWriter(),
                     CenterOfMass = centerOfMass,
-                    ParticleMass = _particleMass,
                     RestDensity = _restDensity,
                     QuadScale = _quadHalfExtent * 2f
                 };
@@ -379,8 +378,7 @@ namespace ParticlesSimulation
 
         private static void ComputeInnerClampBox(float2 wMin, float2 wMax, float margin, out float2 innerMin, out float2 innerMax)
         {
-            var ext = wMax - wMin;
-            var m = math.min(margin, math.max(0f, 0.49f * math.cmin(ext)));
+            var m = BoundsUtility.EffectiveMargin(wMin, wMax, margin);
             innerMin = wMin + m;
             innerMax = wMax - m;
         }

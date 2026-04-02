@@ -11,7 +11,7 @@ namespace ParticlesSimulation.Jobs
 {
     [BurstCompile(FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard)]
     [WithAll(typeof(ParticleSimulatedTag))]
-    internal partial struct IntegratePositionsJob : IJobEntity
+    internal partial struct FinalizePositionsJob : IJobEntity
     {
         public float invDt;
         public SimulationWorldBounds WorldBounds;
@@ -22,8 +22,7 @@ namespace ParticlesSimulation.Jobs
             var pos = core.position;
             if (WorldBounds.BoundsEnabled != 0)
             {
-                var ext = WorldBounds.Max - WorldBounds.Min;
-                var margin = math.min(WorldBounds.Margin, math.max(0f, 0.49f * math.cmin(ext)));
+                var margin = BoundsUtility.EffectiveMargin(WorldBounds.Min, WorldBounds.Max, WorldBounds.Margin);
                 var min = WorldBounds.Min + margin;
                 var max = WorldBounds.Max - margin;
                 pred = math.clamp(pred, min, max);
@@ -56,7 +55,6 @@ namespace ParticlesSimulation.Jobs
         [ReadOnly] public NativeArray<SpawnParticle> Buffer;
 
         public float2 CenterOfMass;
-        public float ParticleMass;
         public float RestDensity;
         public float QuadScale;
 
@@ -64,15 +62,14 @@ namespace ParticlesSimulation.Jobs
         {
             var e = Entities[index];
             var p = Buffer[index];
-            var local = p.position - CenterOfMass;
+            // NOTE: CenterOfMass is kept for future rigid shape-matching (rest pose = p.position - CenterOfMass).
             var colorId = (byte)math.min(p.colorIndex, 7);
 
             CommandBuffer.SetComponent(index, e, new ParticleCore
             {
                 position = p.position,
                 predictedPosition = p.position,
-                velocity = float2.zero,
-                mass = ParticleMass
+                velocity = float2.zero
             });
 
             CommandBuffer.SetComponent(index, e, new ParticleFluid
@@ -80,7 +77,6 @@ namespace ParticlesSimulation.Jobs
                 density = 0f,
                 pressure = 0f,
                 restDensity = RestDensity,
-                mass = ParticleMass,
                 lambda = 0f
             });
 

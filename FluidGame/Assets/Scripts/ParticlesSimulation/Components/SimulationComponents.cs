@@ -14,30 +14,31 @@ namespace ParticlesSimulation.Components
     
     /// <summary>
     /// Core kinematic state (2D simulation uses xy; z unused).
+    /// Per-particle mass lives in <see cref="SimulationConfig.uniformParticleMass"/>.
     /// </summary>
     public struct ParticleCore : IComponentData
     {
         public float2 position;
         public float2 predictedPosition;
         public float2 velocity;
-        public float mass;
     }
 
     /// <summary>
-    /// Fluid samples: density/pressure each frame; rest density and mass are constants.
+    /// Fluid samples: density/pressure each frame; rest density is a constant.
+    /// Per-particle mass lives in <see cref="SimulationConfig.uniformParticleMass"/>.
     /// </summary>
     public struct ParticleFluid : IComponentData
     {
         public float density;
         public float pressure;
         public float restDensity;
-        public float mass;
         /// <summary>PBF Lagrange multiplier scratch for the current solver pass.</summary>
         public float lambda;
     }
 
     /// <summary>
-    /// Phase, palette id, and rest pose for rigid shape matching (local to initial COM).
+    /// Phase tag and palette index. Rigid shape-matching data (rest pose, etc.)
+    /// will be added as a separate component when that feature is implemented.
     /// </summary>
     public struct ParticleState : IComponentData
     {
@@ -92,7 +93,6 @@ namespace ParticlesSimulation.Components
         public int solverIterations;
         public int maxParticles;
         public float pbfEpsilon;
-        public float deltaScale;
         /// <summary>Neighbor kernel mass in density/lambda jobs (must match per-particle mass if uniform).</summary>
         public float uniformParticleMass;
     }
@@ -124,7 +124,6 @@ namespace ParticlesSimulation.Components
                 solverIterations = 2,
                 maxParticles = math.max(1024, maxParticles),
                 pbfEpsilon = 120f,
-                deltaScale = 1f,
                 uniformParticleMass = 1f
             };
         }
@@ -141,6 +140,22 @@ namespace ParticlesSimulation.Components
             c.cellSizeInv = 1f / h;
             c.poly6Coefficient = poly6;
             c.spikyGradCoefficient = spiky;
+        }
+    }
+    
+    /// <summary>
+    /// Burst-compatible helpers for simulation boundary calculations.
+    /// </summary>
+    public static class BoundsUtility
+    {
+        /// <summary>
+        /// Computes the effective margin clamped so it never collapses the box to zero.
+        /// Shared between integration jobs and spawn-time inner-rect computation.
+        /// </summary>
+        public static float EffectiveMargin(float2 min, float2 max, float margin)
+        {
+            var ext = max - min;
+            return math.min(margin, math.max(0f, 0.49f * math.cmin(ext)));
         }
     }
 }
