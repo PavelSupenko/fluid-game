@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.2",
     "com.cysharp.unitask": "2.5.10",
     "jp.hadashikick.vcontainer": "1.16.8",
     "com.unity.collab-proxy": "2.12.4",

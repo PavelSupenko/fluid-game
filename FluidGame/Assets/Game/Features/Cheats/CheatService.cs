@@ -5,7 +5,7 @@ using UnityEngine;
 using System.Linq;
 using System;
 using JetBrains.Annotations;
-using Unity.Plastic.Newtonsoft.Json;
+using Newtonsoft.Json;
 using VContainer.Unity;
 
 namespace MeltIt.Features.Cheats

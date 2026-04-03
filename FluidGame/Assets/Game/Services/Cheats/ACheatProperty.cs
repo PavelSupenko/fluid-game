@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System;
 using System.Linq;
-using Unity.Plastic.Newtonsoft.Json;
+using Newtonsoft.Json;
 
 namespace MeltIt.Services.Cheats
 {
