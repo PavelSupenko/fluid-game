@@ -211,13 +211,12 @@ namespace ParticlesSimulation
                 maxEstimate = _gridX * _gridY;
             }
 
-            var cfg = ConfigUtility.CreateDefault(maxEstimate);
+            var cfg = ConfigUtility.CreateDefault(maxEstimate, _resolvedSmoothingRadius);
             cfg.gravityY = _gravityY;
             cfg.maxSpeed = _maxSpeed;
             cfg.fluidDamping = _fluidDamping;
             cfg.stiffness = _stiffness;
             cfg.solverIterations = _solverIterations;
-            ConfigUtility.ApplySmoothingRadius(ref cfg, _resolvedSmoothingRadius);
             cfg.deltaTime = 1f / 60f;
             cfg.maxParticles = math.max(cfg.maxParticles, maxEstimate + 256);
             cfg.uniformParticleMass = _particleMass;

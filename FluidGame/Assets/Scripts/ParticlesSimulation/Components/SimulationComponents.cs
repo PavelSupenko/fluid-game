@@ -126,19 +126,23 @@ namespace ParticlesSimulation.Components
     
     public static class ConfigUtility
     {
-        public static SimulationConfig CreateDefault(int maxParticles)
+        /// <summary>
+        /// Creates a simulation config with all kernel coefficients derived from smoothingRadius.
+        /// Caller is responsible for computing smoothingRadius from particle spacing if using auto-fit.
+        /// </summary>
+        public static SimulationConfig CreateDefault(int maxParticles, float smoothingRadius)
         {
-            const float h = 0.12f;
+            var h = smoothingRadius;
             var h2 = h * h;
             var h8 = h2 * h2 * h2 * h2;
-            var poly6 = 4f / (math.PI * h8);
             var h5 = h * h * h * h * h;
+            var poly6 = 4f / (math.PI * h8);
             // 2D Spiky kernel gradient: ∇W = −(30/πh⁵)·(h−r)²·r̂
             var spikyGrad = -30f / (math.PI * h5);
 
             return new SimulationConfig
             {
-                gravityY = -9.81f,
+                gravityY = -12f,
                 smoothingRadius = h,
                 smoothingRadiusSq = h2,
                 cellSizeInv = 1f / h,
@@ -161,23 +165,9 @@ namespace ParticlesSimulation.Components
             };
         }
 
-        public static void ApplySmoothingRadius(ref SimulationConfig c, float h)
-        {
-            var h2 = h * h;
-            var h8 = h2 * h2 * h2 * h2;
-            var poly6 = 4f / (math.PI * h8);
-            var h5 = h * h * h * h * h;
-            var spikyGrad = -30f / (math.PI * h5);
-            c.smoothingRadius = h;
-            c.smoothingRadiusSq = h2;
-            c.cellSizeInv = 1f / h;
-            c.poly6Coefficient = poly6;
-            c.spikyGradCoefficient = spikyGrad;
-        }
-
         /// <summary>
         /// Estimates rest density for a regular 2D grid packing.
-        /// Call after <see cref="ApplySmoothingRadius"/> so kernel coefficients are up to date.
+        /// Call after creating the config so kernel coefficients are available.
         /// </summary>
         public static float EstimateRestDensity(in SimulationConfig config, float particleSpacing)
         {

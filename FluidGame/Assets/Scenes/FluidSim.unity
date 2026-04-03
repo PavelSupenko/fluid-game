@@ -338,7 +338,7 @@ MonoBehaviour:
   sourceImage: {fileID: 2800000, guid: 28b98f084f66b47a7bd196eb7b66648f, type: 3}
   targetColorCount: 5
   minColorPercentage: 0.001
-  resolution: 20
+  resolution: 50
 --- !u!4 &607794428
 Transform:
   m_ObjectHideFlags: 0
@@ -378,7 +378,7 @@ MonoBehaviour:
     y: -2.2
   _smoothingRadius: 0.12
   _gravityY: -9.81
-  _maxSpeed: 8
+  _maxSpeed: 1
   _fluidDamping: 0.5
   _stiffness: 0.5
   _solverIterations: 3
@@ -402,7 +402,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ParticlesSimulation.Debug.DebugParticleRenderController
   _mode: 0
-  _maxSpeedDisplay: 0.07
+  _maxSpeedDisplay: 1
   _maxNeighborDisplay: 15
 --- !u!1 &619394800
 GameObject:
