@@ -144,11 +144,10 @@ namespace ParticlesSimulation
             if (!_autoFitToContainer || _simulationBounds == null || _simulationBounds.AreaRect == null)
                 return;
 
-            if (!RectTransformSimulationBoundsUtility.TryGetWorldAabbXY(
-                    _simulationBounds.AreaRect, out var wMin, out var wMax))
+            if (_simulationBounds.AreaRect.TryGetWorldAabbXY(out var min, out var max) == false)
                 return;
 
-            ComputeInnerClampBox(wMin, wMax, _simulationBounds.Margin, out var innerMin, out var innerMax);
+            ComputeInnerClampBox(min, max, _simulationBounds.Margin, out var innerMin, out var innerMax);
             var innerSize = innerMax - innerMin;
 
             if (innerSize.x <= 0f || innerSize.y <= 0f)
@@ -161,7 +160,7 @@ namespace ParticlesSimulation
             // If an image source is present, use its particle count to estimate grid.
             if (_imageToFluid != null)
             {
-                _imageToFluid.TryParseImage();
+                _imageToFluid.TryParseImage(Rect.MinMaxRect(min.x, min.y, max.x, max.y));
                 if (_imageToFluid.IsReady)
                 {
                     var totalParticles = _imageToFluid.GeneratedParticleCount;
@@ -173,7 +172,7 @@ namespace ParticlesSimulation
             }
 
             // Spacing so that gridX × gridY particles fit inside the inner rect.
-            var spacing = math.min(innerSize.x / gridX, innerSize.y / gridY);// * 0.8f;
+            var spacing = math.min(innerSize.x / gridX, innerSize.y / gridY);// * 0.9f;
             _resolvedSpacing = spacing;
 
             // Visual size: slightly smaller than spacing so particles don't overlap.
@@ -203,7 +202,6 @@ namespace ParticlesSimulation
             var maxEstimate = 1;
             if (_imageToFluid != null)
             {
-                _imageToFluid.TryParseImage();
                 if (_imageToFluid.IsReady)
                     maxEstimate = math.max(_imageToFluid.GeneratedParticleCount, 1);
                 else

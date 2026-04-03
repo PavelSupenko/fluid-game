@@ -34,7 +34,7 @@ namespace ParticlesSimulation
         /// </summary>
         public bool TryGetWorldAabb(out float2 min, out float2 max)
         {
-            return RectTransformSimulationBoundsUtility.TryGetWorldAabbXY(_areaRect, out min, out max);
+            return _areaRect.TryGetWorldAabbXY(out min, out max);
         }
 
         private void Awake()
@@ -83,7 +83,7 @@ namespace ParticlesSimulation
     /// </summary>
     public static class RectTransformSimulationBoundsUtility
     {
-        public static bool TryGetWorldAabbXY(RectTransform rt, out float2 min, out float2 max)
+        public static bool TryGetWorldAabbXY(this RectTransform rt, out float2 min, out float2 max)
         {
             if (rt == null)
             {

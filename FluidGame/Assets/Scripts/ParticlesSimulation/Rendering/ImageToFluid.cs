@@ -1,4 +1,18 @@
+using System;
+using ParticlesSimulation;
 using UnityEngine;
+
+public struct FluidParticle
+{
+    public Vector2 position;
+    public int typeIndex;
+}
+
+[Serializable]
+public struct FluidTypeDefinition
+{
+    public Color color;
+}
 
 /// <summary>
 /// Converts a Texture2D into a fluid particle field.
@@ -36,12 +50,6 @@ public class ImageToFluid : MonoBehaviour
     [Range(2, 200)]
     public int resolution = 80;
 
-    [Header("Uniform Physics")]
-    [Tooltip("All fluid types share these values so the image stays stable")]
-    public float uniformDensity = 2f;
-    public float uniformViscosity = 6f;
-    public float uniformCohesion = 1f;
-
     // ─── Output Data (read by FluidSimulationGPU) ────────────────
 
     /// <summary>True after Awake if image was successfully processed.</summary>
@@ -61,7 +69,7 @@ public class ImageToFluid : MonoBehaviour
 
     // ─── Lifecycle ───────────────────────────────────────────────
 
-    public void TryParseImage()
+    public void TryParseImage(Rect? bounds)
     {
         if (sourceImage == null)
         {
@@ -69,12 +77,12 @@ public class ImageToFluid : MonoBehaviour
             return;
         }
 
-        ProcessImage();
+        ProcessImage(bounds);
     }
 
     // ─── Image Processing ────────────────────────────────────────
 
-    void ProcessImage()
+    void ProcessImage(Rect? bounds)
     {
         // Read pixels
         Color[] pixels;
@@ -145,11 +153,7 @@ public class ImageToFluid : MonoBehaviour
         {
             GeneratedFluidTypes[i] = new FluidTypeDefinition
             {
-                name = $"Color_{i}",
                 color = result.palette[i],
-                density = uniformDensity,
-                viscosity = uniformViscosity,
-                cohesion = uniformCohesion
             };
         }
 
@@ -157,12 +161,10 @@ public class ImageToFluid : MonoBehaviour
         // Read container bounds from whichever simulation is present
         Vector2 containerMin, containerMax;
 
-        var jobsSim = GetComponent<FluidSimulationJobs>();
-
-        if (jobsSim != null)
+        if (bounds != null)
         {
-            containerMin = jobsSim.containerMin;
-            containerMax = jobsSim.containerMax;
+            containerMin = bounds.Value.min;
+            containerMax = bounds.Value.max;
         }
         else
         {
@@ -214,12 +216,7 @@ public class ImageToFluid : MonoBehaviour
                         originX + x * ComputedSpacing,
                         originY + y * ComputedSpacing
                     ),
-                    velocity = Vector2.zero,
                     typeIndex = typeIdx,
-                    density = 0f,
-                    pressure = 0f,
-                    alive = 1f,
-                    color = result.palette[typeIdx]
                 };
 
                 idx++;

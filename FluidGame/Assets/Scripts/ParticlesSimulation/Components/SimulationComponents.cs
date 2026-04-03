@@ -156,9 +156,9 @@ namespace ParticlesSimulation.Components
                 pbfEpsilon = 120f,
                 restDensity = 300f,
                 uniformParticleMass = 1f,
-                maxSpeed = 4f,
+                maxSpeed = 0.15f,
                 maxCorrectionFraction = 0.3f,
-                maxDisplacementFraction = 0.5f,
+                maxDisplacementFraction = 0.2f,
                 artificialPressureStrength = 0.1f,
                 artificialPressureExponent = 4f,
                 artificialPressureRadius = 0.2f

@@ -80,11 +80,38 @@ namespace ParticlesSimulation.Jobs
 
             var velocity = (predicted - position) * InverseDeltaTime;
 
-            // Inelastic boundary: kill velocity component directed into the wall.
-            if (atMinX && velocity.x < 0f) velocity.x = 0f;
-            if (atMaxX && velocity.x > 0f) velocity.x = 0f;
-            if (atMinY && velocity.y < 0f) velocity.y = 0f;
-            if (atMaxY && velocity.y > 0f) velocity.y = 0f;
+            // Inelastic boundary: change velocity component directed into the wall.
+            if (atMinX)
+            {
+                if (velocity.x < 0f)
+                    velocity.x = 0f;
+
+                velocity.y /= 3f;
+            }
+
+            if (atMaxX)
+            {
+                if (velocity.x > 0f)
+                    velocity.x = 0f;
+                
+                velocity.y /= 3f;
+            }
+
+            if (atMinY)
+            {
+                if (velocity.y < 0f)
+                    velocity.y = 0f;
+                
+                velocity.x = math.clamp(velocity.x, -0.05f, 0.05f);
+            }
+
+            if (atMaxY)
+            {
+                if (velocity.y > 0f)
+                    velocity.y = 0f;
+                
+                velocity.x = math.clamp(velocity.x, -0.05f, 0.05f);
+            }
 
             // Hard cap on velocity magnitude.
             var speedSq = math.lengthsq(velocity);
