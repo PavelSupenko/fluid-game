@@ -112,11 +112,12 @@ namespace ParticlesSimulation.Components
         /// <summary>Maximum correction per iteration as a fraction of smoothingRadius.</summary>
         public float maxCorrectionFraction;
         /// <summary>
-        /// Caps the constraint C = ρ/ρ₀ − 1 to limit solver response under deep hydrostatic compression.
-        /// Without this, bottom layers of tall particle columns produce corrections that exceed the spacing,
-        /// destabilizing the simulation. Values 0.1–0.5 work well; higher = stiffer but less stable.
+        /// Maximum total displacement per frame as a fraction of smoothingRadius.
+        /// This is the primary stability safety valve. The solver sees full constraint magnitudes
+        /// and computes correct lambdas, but no particle moves further than this per frame.
+        /// Values 0.3–0.6 balance stability with responsiveness.
         /// </summary>
-        public float maxConstraint;
+        public float maxDisplacementFraction;
         /// <summary>Strength of artificial pressure to prevent surface particle clustering (k term).</summary>
         public float artificialPressureStrength;
         /// <summary>Exponent for artificial pressure falloff (n term, typically 4).</summary>
@@ -156,8 +157,8 @@ namespace ParticlesSimulation.Components
                 restDensity = 300f,
                 uniformParticleMass = 1f,
                 maxSpeed = 4f,
-                maxCorrectionFraction = 0.1f,
-                maxConstraint = 0.3f,
+                maxCorrectionFraction = 0.3f,
+                maxDisplacementFraction = 0.5f,
                 artificialPressureStrength = 0.1f,
                 artificialPressureExponent = 4f,
                 artificialPressureRadius = 0.2f

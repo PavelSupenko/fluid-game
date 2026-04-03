@@ -41,12 +41,23 @@ namespace ParticlesSimulation.Jobs
         public float InverseDeltaTime;
         public float MaxSpeedSq;
         public float MaxSpeed;
+        /// <summary>Maximum distance a particle can move in one frame (world units).</summary>
+        public float MaxDisplacement;
+        public float MaxDisplacementSq;
         public SimulationWorldBounds WorldBounds;
 
         public void Execute(ref ParticleCore core)
         {
             var predicted = core.predictedPosition;
             var position = core.position;
+
+            // Clamp total displacement per frame. This is the single safety valve
+            // that prevents solver overcorrection, gravity overshoot, or any other
+            // source from moving a particle further than one neighborhood per frame.
+            var displacement = predicted - position;
+            var dispSq = math.lengthsq(displacement);
+            if (dispSq > MaxDisplacementSq)
+                predicted = position + displacement * (MaxDisplacement * math.rsqrt(dispSq));
 
             var atMinX = false;
             var atMaxX = false;
@@ -70,13 +81,12 @@ namespace ParticlesSimulation.Jobs
             var velocity = (predicted - position) * InverseDeltaTime;
 
             // Inelastic boundary: kill velocity component directed into the wall.
-            // For a thick viscous fluid, energy should be fully absorbed on contact.
             if (atMinX && velocity.x < 0f) velocity.x = 0f;
             if (atMaxX && velocity.x > 0f) velocity.x = 0f;
             if (atMinY && velocity.y < 0f) velocity.y = 0f;
             if (atMaxY && velocity.y > 0f) velocity.y = 0f;
 
-            // Hard cap on velocity magnitude to prevent energy runaway.
+            // Hard cap on velocity magnitude.
             var speedSq = math.lengthsq(velocity);
             if (speedSq > MaxSpeedSq)
                 velocity *= MaxSpeed * math.rsqrt(speedSq);

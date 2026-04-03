@@ -89,11 +89,15 @@ namespace ParticlesSimulation.Systems
 
             var handle = state.Dependency;
 
+            var maxDisplacement = config.maxDisplacementFraction * config.smoothingRadius;
+
             handle = new Jobs.FinalizePositionsJob
             {
                 InverseDeltaTime = inverseDeltaTime,
                 MaxSpeed = config.maxSpeed,
                 MaxSpeedSq = config.maxSpeed * config.maxSpeed,
+                MaxDisplacement = maxDisplacement,
+                MaxDisplacementSq = maxDisplacement * maxDisplacement,
                 WorldBounds = bounds
             }.ScheduleParallel(_query, handle);
 
