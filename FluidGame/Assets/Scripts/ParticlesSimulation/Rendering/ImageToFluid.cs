@@ -1,6 +1,5 @@
-using System;
-using ParticlesSimulation;
 using UnityEngine;
+using System;
 
 public struct FluidParticle
 {
@@ -14,21 +13,6 @@ public struct FluidTypeDefinition
     public Color color;
 }
 
-/// <summary>
-/// Converts a Texture2D into a fluid particle field.
-/// 
-/// Assign a source image in the inspector. On Awake, this component:
-///   1. Reads pixel data from the texture
-///   2. Quantizes the palette to targetColorCount colors (median cut)
-///   3. Creates FluidTypeDefinition[] with uniform physics but distinct colors
-///   4. Creates a FluidParticle[] grid that reproduces the image
-///
-/// FluidSimulationGPU checks for this component and uses its data instead
-/// of the default grid spawn.
-///
-/// SETUP: Add this component to the same GameObject as FluidSimulationGPU.
-///        Assign a Texture2D (must have Read/Write enabled in import settings).
-/// </summary>
 public class ImageToFluid : MonoBehaviour
 {
     [Header("Source Image")]

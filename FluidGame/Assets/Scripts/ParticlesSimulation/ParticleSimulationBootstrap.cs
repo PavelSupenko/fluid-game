@@ -8,7 +8,6 @@ using Unity.Rendering;
 using Unity.Transforms;
 using UnityEngine;
 using UnityEngine.Rendering;
-using UnityEngine.Serialization;
 
 namespace ParticlesSimulation
 {
@@ -38,6 +37,9 @@ namespace ParticlesSimulation
         [Tooltip("Manual particle spacing (used when Auto Fit is off or no bounds assigned).")]
         [SerializeField]
         private float _particleSpacing = 0.08f;
+        
+        [SerializeField]
+        private float _particleSpacingMultiplier = 0.8f;
 
         [Tooltip("When enabled and Simulation Bounds is assigned, spacing and visual size " +
                  "are computed automatically from the container dimensions and grid resolution.")]
@@ -53,10 +55,10 @@ namespace ParticlesSimulation
         private float _smoothingRadius = 0.12f;
 
         [SerializeField]
-        private float _meltLineY = -1.2f;
-
+        private float _gravityY = -9.81f;
+        
         [SerializeField]
-        private float _gravityY = -12f;
+        private float _maxSpeed = 8f;
 
         [Tooltip("Per-frame velocity damping for fluid particles (0 = no damping, 1 = full stop). " +
                  "Higher values = thicker fluid. 0.3 gives honey-like behavior.")]
@@ -66,9 +68,6 @@ namespace ParticlesSimulation
 
         [SerializeField]
         private float _stiffness = 0.5f;
-
-        [SerializeField]
-        private float _rigidShapeStiffness = 0.65f;
 
         [SerializeField]
         private int _solverIterations = 4;
@@ -172,7 +171,7 @@ namespace ParticlesSimulation
             }
 
             // Spacing so that gridX × gridY particles fit inside the inner rect.
-            var spacing = math.min(innerSize.x / gridX, innerSize.y / gridY);// * 0.9f;
+            var spacing = math.min(innerSize.x / gridX, innerSize.y / gridY) * _particleSpacingMultiplier;
             _resolvedSpacing = spacing;
 
             // Visual size: slightly smaller than spacing so particles don't overlap.
@@ -214,13 +213,12 @@ namespace ParticlesSimulation
 
             var cfg = ConfigUtility.CreateDefault(maxEstimate);
             cfg.gravityY = _gravityY;
-            cfg.meltLineY = _meltLineY;
+            cfg.maxSpeed = _maxSpeed;
             cfg.fluidDamping = _fluidDamping;
             cfg.stiffness = _stiffness;
-            cfg.rigidShapeStiffness = _rigidShapeStiffness;
             cfg.solverIterations = _solverIterations;
             ConfigUtility.ApplySmoothingRadius(ref cfg, _resolvedSmoothingRadius);
-            cfg.deltaTime = Time.fixedDeltaTime > 0f ? Time.fixedDeltaTime : Time.deltaTime;
+            cfg.deltaTime = 1f / 60f;
             cfg.maxParticles = math.max(cfg.maxParticles, maxEstimate + 256);
             cfg.uniformParticleMass = _particleMass;
             if (_autoEstimateRestDensity)

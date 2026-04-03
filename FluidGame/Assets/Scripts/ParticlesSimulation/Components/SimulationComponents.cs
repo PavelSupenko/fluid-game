@@ -91,12 +91,10 @@ namespace ParticlesSimulation.Components
         public float smoothingRadius;
         public float smoothingRadiusSq;
         public float cellSizeInv;
-        public float meltLineY;
         /// <summary>Per-frame fluid velocity damping (0 = no damping, 1 = full stop). NOT multiplied by dt.</summary>
         public float fluidDamping;
         /// <summary>PBD stiffness applied to position corrections (0..1). Scaled by 1/solverIterations internally.</summary>
         public float stiffness;
-        public float rigidShapeStiffness;
         public float deltaTime;
         public float poly6Coefficient;
         public float spikyGradCoefficient;
@@ -140,14 +138,12 @@ namespace ParticlesSimulation.Components
 
             return new SimulationConfig
             {
-                gravityY = -12f,
+                gravityY = -9.81f,
                 smoothingRadius = h,
                 smoothingRadiusSq = h2,
                 cellSizeInv = 1f / h,
-                meltLineY = -1.2f,
                 fluidDamping = 0.3f,
                 stiffness = 0.5f,
-                rigidShapeStiffness = 0.65f,
                 deltaTime = 1f / 60f,
                 poly6Coefficient = poly6,
                 spikyGradCoefficient = spikyGrad,

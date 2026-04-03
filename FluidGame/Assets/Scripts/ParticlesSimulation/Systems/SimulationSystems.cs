@@ -7,11 +7,16 @@ using Unity.Burst;
 namespace ParticlesSimulation.Systems
 {
     /// <summary>
-    /// Keeps <see cref="SimulationConfig.deltaTime"/> aligned with the frame (clamped for stability).
+    /// Keeps <see cref="SimulationConfig.deltaTime"/> at a fixed simulation step (1/60s).
+    /// At framerates below 60fps the simulation slows down proportionally rather than
+    /// taking larger timesteps, which preserves stability. A full substep approach
+    /// (running the solver multiple times per frame) can be added later if needed.
     /// </summary>
     [UpdateInGroup(typeof(ParticleSimulationGroup), OrderFirst = true)]
     public partial struct ParticleSimulationClockSystem : ISystem
     {
+        private const float FixedSimDt = 1f / 60f;
+
         public void OnCreate(ref SystemState state)
         {
             state.RequireForUpdate<SimulationConfig>();
@@ -20,7 +25,7 @@ namespace ParticlesSimulation.Systems
         public void OnUpdate(ref SystemState state)
         {
             var cfg = SystemAPI.GetSingletonRW<SimulationConfig>();
-            cfg.ValueRW.deltaTime = math.min(SystemAPI.Time.DeltaTime, 1f / 20f);
+            cfg.ValueRW.deltaTime = FixedSimDt;
         }
     }
 
