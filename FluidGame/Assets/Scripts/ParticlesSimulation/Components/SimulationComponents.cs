@@ -165,25 +165,25 @@ namespace ParticlesSimulation.Components
                 smoothingRadius = h,
                 smoothingRadiusSq = h2,
                 cellSizeInv = 1f / h,
-                fluidDamping = 0.05f,      // Reduced: XSPH handles viscosity better than scalar damping
-                stiffness = 1f,             // Full stiffness — SOR handles convergence acceleration
+                fluidDamping = 0.05f,      // Low: XSPH handles viscosity better than scalar damping
+                stiffness = 1f,            // Full stiffness
                 deltaTime = 1f / 60f,
                 poly6Coefficient = poly6,
                 spikyGradCoefficient = spikyGrad,
                 solverIterations = 4,
                 maxParticles = math.max(1024, maxParticles),
-                pbfEpsilon = 6f,            // Was 120 — that made constraints extremely soft
+                pbfEpsilon = 6f,           // Regularization — prevents division by zero near equilibrium
                 restDensity = 300f,
                 uniformParticleMass = 1f,
-                maxSpeed = 8f,              // Was 0.15 — let the solver do its job
-                maxCorrectionFraction = 0.8f,  // Was 0.3 — allow larger per-iteration corrections
-                maxDisplacementFraction = 0.5f, // Was 0.2 — still a safety valve but less restrictive
+                maxSpeed = 8f,
+                maxCorrectionFraction = 0.5f,  // Per-iteration safety valve (fraction of h)
+                maxDisplacementFraction = 0.5f, // Per-frame safety valve (fraction of h)
                 artificialPressureStrength = 0.1f,
                 artificialPressureExponent = 4f,
                 artificialPressureRadius = 0.2f,
-                sorOmega = 1.5f,            // SOR: 1.3–1.7 sweet spot for PBF
-                xsphViscosity = 0.3f,       // Smooth viscous flow (ice cream consistency)
-                boundaryFriction = 0.3f     // Moderate wall friction
+                sorOmega = 1.0f,           // With /iterations: omega = 1.0/4 = 0.25 per iteration
+                xsphViscosity = 0.3f,      // Smooth viscous flow (ice cream consistency)
+                boundaryFriction = 0.3f    // Moderate wall friction
             };
         }
 

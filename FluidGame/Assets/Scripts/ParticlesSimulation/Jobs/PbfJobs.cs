@@ -82,6 +82,10 @@ namespace ParticlesSimulation.Jobs
     /// <summary>
     /// Computes the PBF Lagrange multiplier λ for each particle.
     /// λᵢ = −Cᵢ / (Σₖ |∇ₚₖ Cᵢ|² + ε), where Cᵢ = ρᵢ/ρ₀ − 1.
+    /// Uses a bilateral constraint (not one-sided): particles are pushed apart when
+    /// compressed AND pulled together when under-dense. This provides natural cohesion
+    /// for contained fluids and prevents the sharp transition from zero-correction to
+    /// large-correction that causes oscillation with one-sided constraints.
     /// Gradient direction convention: (pᵢ − pⱼ), giving correct ∇_{pᵢ}W signs.
     /// </summary>
     [BurstCompile(FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard)]
@@ -107,18 +111,11 @@ namespace ParticlesSimulation.Jobs
             var cell = SpatialHash.CellCoords(position, CellSizeInverse);
             var inverseRestDensity = math.rcp(RestDensity);
 
-            // One-sided PBF constraint: C = max(0, ρ/ρ₀ − 1).
-            // Only resist compression, not tension. Total displacement per frame
-            // is bounded in FinalizePositionsJob, so the solver can see the full
-            // constraint magnitude without risk of overshoot.
-            var constraint = math.max(0f, density * inverseRestDensity - 1f);
-
-            // Under-dense particles need no correction — skip the expensive gradient loop.
-            if (constraint <= 0f)
-            {
-                Lambdas[index] = 0f;
-                return;
-            }
+            // Bilateral constraint: C = ρ/ρ₀ − 1.
+            // Positive when compressed (pushes apart), negative when under-dense (pulls together).
+            // This gives smooth approach to equilibrium from both sides, preventing the
+            // oscillation that one-sided max(0,...) causes when particles suddenly compress.
+            var constraint = density * inverseRestDensity - 1f;
 
             // Accumulate |∇_{pₖ} Cᵢ|² for the denominator.
             var gradientSumSelf = float2.zero;

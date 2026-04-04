@@ -41,7 +41,7 @@ namespace ParticlesSimulation
         [Tooltip("Smoothing radius as a multiple of measured particle spacing. " +
                  "2.0 gives ~12 neighbors in 2D (stable). 1.5 gives ~8 (minimum). " +
                  "Higher = smoother density estimates but slower.")]
-        [Range(1.5f, 3.0f)]
+        [Range(1.5f, 10.0f)]
         [SerializeField]
         private float _smoothingRadiusMultiplier = 2.0f;
 
@@ -77,11 +77,11 @@ namespace ParticlesSimulation
         [SerializeField]
         private float _particleMass = 1f;
 
-        [Tooltip("Successive Over-Relaxation factor. Values > 1 accelerate solver convergence " +
-                 "(1.5 ≈ doubling iteration count). Range: 1.0–1.8.")]
+        [Tooltip("SOR factor divided by iteration count. 1.0 with 4 iterations = 0.25 per iteration. " +
+                 "Increase to 1.5 for faster convergence. Range: 0.5–1.9.")]
         [Range(0.5f, 1.9f)]
         [SerializeField]
-        private float _sorOmega = 1.5f;
+        private float _sorOmega = 1.0f;
 
         [Tooltip("XSPH velocity smoothing (0 = off, 0.3 = viscous, 0.6+ = very thick). " +
                  "Blends velocities between neighbors for cohesive flow. " +

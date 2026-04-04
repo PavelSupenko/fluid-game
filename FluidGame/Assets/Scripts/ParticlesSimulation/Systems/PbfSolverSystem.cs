@@ -86,8 +86,11 @@ namespace ParticlesSimulation.Systems
 
             // --- Solver iteration loop ---
             var iterations = math.max(1, config.solverIterations);
-            // PBD relaxation with SOR: each iteration applies (stiffness · ω / N) of the correction.
-            // stiffness=1, ω=1.5, N=4 → 0.375 per iteration ≈ 1.5× acceleration over standard Jacobi.
+            // Damped Jacobi iteration for bilateral PBF. Each iteration recomputes
+            // density → lambda → Δp, then applies Δp scaled by (stiffness · ω / N).
+            // With bilateral constraints (not one-sided), this provides smooth convergence
+            // from both directions (compression AND tension), preventing oscillation.
+            // Default: stiffness=1, ω=1, N=4 → 0.25 per iteration.
             var omega = math.saturate(config.stiffness) * math.clamp(config.sorOmega, 0.5f, 1.9f) / iterations;
             var maxCorrection = config.maxCorrectionFraction * config.smoothingRadius;
 
