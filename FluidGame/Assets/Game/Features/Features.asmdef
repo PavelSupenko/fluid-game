@@ -12,7 +12,10 @@
         "Unity.Burst",
         "Unity.Collections",
         "Unity.Mathematics",
-        "Services"
+        "Services",
+        "Unity.Entities",
+        "Unity.Entities.Graphics",
+        "Unity.Transforms"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

@@ -6,7 +6,7 @@ EditorBuildSettings:
   serializedVersion: 2
   m_Scenes:
   - enabled: 1
-    path: Assets/Scenes/FluidSim.unity
+    path: Assets/Game/Scenes/FluidSim.unity
     guid: d658f7754aead42aeb16b6f4f0e69280
   - enabled: 1
     path: Assets/ThirdParty/MobileConsoleKit/Assets/LogConsole.unity
