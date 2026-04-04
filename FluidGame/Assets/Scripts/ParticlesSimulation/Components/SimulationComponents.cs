@@ -141,6 +141,13 @@ namespace ParticlesSimulation.Components
         /// Values 0.2–0.5 feel natural for most fluids.
         /// </summary>
         public float boundaryFriction;
+        /// <summary>
+        /// Scales the tension side of the bilateral constraint (0..1).
+        /// 1.0 = symmetric (equal attraction and repulsion).
+        /// 0.2 = mild cohesion (prevents oscillation without volume collapse).
+        /// 0.0 = pure one-sided (no cohesion, original PBF behavior).
+        /// </summary>
+        public float cohesionStrength;
     }
     
     public static class ConfigUtility
@@ -181,9 +188,10 @@ namespace ParticlesSimulation.Components
                 artificialPressureStrength = 0.1f,
                 artificialPressureExponent = 4f,
                 artificialPressureRadius = 0.2f,
-                sorOmega = 1.0f,           // With /iterations: omega = 1.0/4 = 0.25 per iteration
+                sorOmega = 1.5f,           // With /iterations: 1.5/N per iteration. Accelerates convergence ~1.5×
                 xsphViscosity = 0.3f,      // Smooth viscous flow (ice cream consistency)
-                boundaryFriction = 0.3f    // Moderate wall friction
+                boundaryFriction = 0.3f,   // Moderate wall friction
+                cohesionStrength = 0.2f    // Mild cohesion — smooth transition without volume collapse
             };
         }
 

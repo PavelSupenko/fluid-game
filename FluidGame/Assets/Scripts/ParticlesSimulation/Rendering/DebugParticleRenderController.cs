@@ -98,6 +98,12 @@ namespace ParticlesSimulation.Debug
 
         private Entity _debugEntity;
         private bool _entityCreated;
+        
+        public DebugParticleMode Mode 
+        { 
+            get => _mode;
+            set => _mode = value;
+        }
 
         private void Awake()
         {

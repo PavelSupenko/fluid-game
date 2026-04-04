@@ -119,6 +119,51 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
+--- !u!1 &517690838
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 517690840}
+  - component: {fileID: 517690839}
+  m_Layer: 0
+  m_Name: Cheats
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &517690839
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 517690838}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a82a09d300fe42d0b9ff192e7c046159, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::DefaultNamespace.SimulationCheats
+  _renderController: {fileID: 607794431}
+--- !u!4 &517690840
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 517690838}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0.24271, y: -1.68107, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &519420028
 GameObject:
   m_ObjectHideFlags: 0
@@ -288,7 +333,8 @@ MonoBehaviour:
   parentReference:
     TypeName: 
   autoRun: 1
-  autoInjectGameObjects: []
+  autoInjectGameObjects:
+  - {fileID: 517690838}
 --- !u!4 &603375931
 Transform:
   m_ObjectHideFlags: 0
@@ -338,7 +384,7 @@ MonoBehaviour:
   sourceImage: {fileID: 2800000, guid: 28b98f084f66b47a7bd196eb7b66648f, type: 3}
   targetColorCount: 5
   minColorPercentage: 0.001
-  resolution: 15
+  resolution: 32
 --- !u!4 &607794428
 Transform:
   m_ObjectHideFlags: 0
@@ -380,11 +426,13 @@ MonoBehaviour:
   _maxSpeed: 8
   _fluidDamping: 0.05
   _stiffness: 1
-  _solverIterations: 6
+  _solverIterations: 4
+  _autoIterations: 0
   _particleMass: 1
   _sorOmega: 0.5
   _xsphViscosity: 0.3
   _boundaryFriction: 0.3
+  _cohesionStrength: 0.2
   _restDensity: 300
   _autoEstimateRestDensity: 1
   _particleMaterial: {fileID: 2100000, guid: fdd1a38c5dd934d2487ea31e043e902f, type: 2}
@@ -404,7 +452,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ParticlesSimulation.Debug.DebugParticleRenderController
   _mode: 0
-  _maxSpeedDisplay: 0.2
+  _maxSpeedDisplay: 0.002
   _maxNeighborDisplay: 15
 --- !u!1 &619394800
 GameObject:
@@ -814,3 +862,4 @@ SceneRoots:
   - {fileID: 603375931}
   - {fileID: 1338432586}
   - {fileID: 1670369127}
+  - {fileID: 517690840}

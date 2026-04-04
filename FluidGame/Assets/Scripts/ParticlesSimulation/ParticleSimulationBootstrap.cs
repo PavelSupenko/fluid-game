@@ -74,14 +74,21 @@ namespace ParticlesSimulation
         [SerializeField]
         private int _solverIterations = 4;
 
+        [Tooltip("Automatically compute solver iterations from container height and smoothing radius. " +
+                 "Ensures pressure propagates across the full fluid column. " +
+                 "Formula: ceil(containerHeight / smoothingRadius / 4). " +
+                 "Overrides manual Solver Iterations when enabled.")]
+        [SerializeField]
+        private bool _autoIterations = true;
+
         [SerializeField]
         private float _particleMass = 1f;
 
-        [Tooltip("SOR factor divided by iteration count. 1.0 with 4 iterations = 0.25 per iteration. " +
-                 "Increase to 1.5 for faster convergence. Range: 0.5–1.9.")]
-        [Range(0.5f, 1.9f)]
+        [Tooltip("SOR factor divided by iteration count. Higher values accelerate convergence. " +
+                 "1.5 is the sweet spot (each iteration ≈ 1.5× as effective). Range: 0.5–1.9.")]
+        [Range(0.1f, 3.0f)]
         [SerializeField]
-        private float _sorOmega = 1.0f;
+        private float _sorOmega = 1.5f;
 
         [Tooltip("XSPH velocity smoothing (0 = off, 0.3 = viscous, 0.6+ = very thick). " +
                  "Blends velocities between neighbors for cohesive flow. " +
@@ -95,6 +102,13 @@ namespace ParticlesSimulation
         [Range(0f, 1f)]
         [SerializeField]
         private float _boundaryFriction = 0.3f;
+
+        [Tooltip("Cohesion strength for the bilateral constraint (0 = one-sided/no cohesion, " +
+                 "0.2 = mild cohesion, 1.0 = full symmetric). Controls how strongly under-dense " +
+                 "particles attract neighbors. Low values prevent volume collapse at the surface.")]
+        [Range(0f, 1f)]
+        [SerializeField]
+        private float _cohesionStrength = 0.2f;
 
         [Tooltip("Manual rest density. Ignored when Auto Estimate is enabled.")]
         [SerializeField]
@@ -281,13 +295,38 @@ namespace ParticlesSimulation
             cfg.maxSpeed = _maxSpeed;
             cfg.fluidDamping = _fluidDamping;
             cfg.stiffness = _stiffness;
-            cfg.solverIterations = _solverIterations;
             cfg.deltaTime = 1f / 60f;
             cfg.maxParticles = math.max(cfg.maxParticles, particleCount + 256);
             cfg.uniformParticleMass = _particleMass;
             cfg.sorOmega = _sorOmega;
             cfg.xsphViscosity = _xsphViscosity;
             cfg.boundaryFriction = _boundaryFriction;
+            cfg.cohesionStrength = _cohesionStrength;
+
+            // Auto-compute solver iterations from container dimensions.
+            // Jacobi propagates pressure ~1 kernel width per iteration.
+            // Need enough iterations to cover the tallest container axis.
+            // With SOR ω=1.5, each iteration is ~1.5× as effective, so divide by ω.
+            if (_autoIterations && _simulationBounds != null && _simulationBounds.TryGetWorldAabb(out var bMin, out var bMax))
+            {
+                var containerHeight = math.max(bMax.y - bMin.y, bMax.x - bMin.x);
+                var kernelWidths = containerHeight / _resolvedSmoothingRadius;
+                // Need ~kernelWidths/4 iterations (each iteration propagates ~1 kernel width,
+                // bilateral constraint + multiple frames allow ~4× coverage factor).
+                var effectiveOmega = math.max(1f, _sorOmega);
+                var autoIter = (int)math.ceil(kernelWidths / (4f * effectiveOmega));
+                cfg.solverIterations = math.clamp(autoIter, 4, 32);
+
+                UnityEngine.Debug.Log(
+                    $"[ParticleSimulationBootstrap] Auto iterations: containerH={containerHeight:F2}, " +
+                    $"h={_resolvedSmoothingRadius:F4}, kernelWidths={kernelWidths:F1}, " +
+                    $"ω={effectiveOmega:F1} → iterations={cfg.solverIterations}");
+            }
+            else
+            {
+                cfg.solverIterations = _solverIterations;
+            }
+
             if (_autoEstimateRestDensity)
             {
                 cfg.restDensity = ConfigUtility.EstimateRestDensity(in cfg, _resolvedSpacing);

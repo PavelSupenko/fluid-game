@@ -132,6 +132,7 @@ namespace ParticlesSimulation.Systems
                     RestDensity = config.restDensity,
                     ParticleMass = config.uniformParticleMass,
                     Epsilon = config.pbfEpsilon,
+                    CohesionStrength = math.saturate(config.cohesionStrength),
                     Lambdas = lambdaSlice
                 }.Schedule(particleCount, 64, handle);
 

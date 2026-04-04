@@ -101,6 +101,13 @@ namespace ParticlesSimulation.Jobs
         public float RestDensity;
         public float ParticleMass;
         public float Epsilon;
+        /// <summary>
+        /// Scales the tension (under-dense) side of the bilateral constraint (0..1).
+        /// At 1.0, tension = repulsion strength. At 0.2, surface particles pull inward
+        /// at only 20% strength, preventing volume collapse while still providing
+        /// smooth transition through ρ₀. Set to 0 for pure one-sided (no cohesion).
+        /// </summary>
+        public float CohesionStrength;
 
         [WriteOnly] public NativeArray<float> Lambdas;
 
@@ -111,11 +118,15 @@ namespace ParticlesSimulation.Jobs
             var cell = SpatialHash.CellCoords(position, CellSizeInverse);
             var inverseRestDensity = math.rcp(RestDensity);
 
-            // Bilateral constraint: C = ρ/ρ₀ − 1.
-            // Positive when compressed (pushes apart), negative when under-dense (pulls together).
-            // This gives smooth approach to equilibrium from both sides, preventing the
-            // oscillation that one-sided max(0,...) causes when particles suddenly compress.
-            var constraint = density * inverseRestDensity - 1f;
+            // Asymmetric bilateral constraint:
+            // Compression (ρ > ρ₀): C = ρ/ρ₀ − 1  (full strength repulsion)
+            // Tension (ρ < ρ₀):     C = cohesion · (ρ/ρ₀ − 1)  (reduced attraction)
+            // This prevents the sharp zero→large jump of one-sided constraints
+            // while avoiding excessive volume collapse from surface particle deficiency.
+            var rawConstraint = density * inverseRestDensity - 1f;
+            var constraint = rawConstraint >= 0f
+                ? rawConstraint
+                : rawConstraint * CohesionStrength;
 
             // Accumulate |∇_{pₖ} Cᵢ|² for the denominator.
             var gradientSumSelf = float2.zero;
