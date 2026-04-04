@@ -338,7 +338,7 @@ MonoBehaviour:
   sourceImage: {fileID: 2800000, guid: 28b98f084f66b47a7bd196eb7b66648f, type: 3}
   targetColorCount: 5
   minColorPercentage: 0.001
-  resolution: 50
+  resolution: 64
 --- !u!4 &607794428
 Transform:
   m_ObjectHideFlags: 0
@@ -371,18 +371,20 @@ MonoBehaviour:
   _gridX: 32
   _gridY: 48
   _particleSpacing: 0.08
-  _particleSpacingMultiplier: 1
-  _autoFitToContainer: 1
+  _smoothingRadiusMultiplier: 3
   _fallbackOrigin:
     x: -1.6
     y: -2.2
   _smoothingRadius: 0.12
   _gravityY: -9.81
-  _maxSpeed: 1
-  _fluidDamping: 0.5
-  _stiffness: 0.5
-  _solverIterations: 3
+  _maxSpeed: 8
+  _fluidDamping: 0.05
+  _stiffness: 1
+  _solverIterations: 6
   _particleMass: 1
+  _sorOmega: 1.5
+  _xsphViscosity: 0.3
+  _boundaryFriction: 0.3
   _restDensity: 300
   _autoEstimateRestDensity: 1
   _particleMaterial: {fileID: 2100000, guid: fdd1a38c5dd934d2487ea31e043e902f, type: 2}
@@ -536,8 +538,8 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0, y: -0.29}
-  m_SizeDelta: {x: 4, y: 6}
+  m_AnchoredPosition: {x: 0, y: 2.1658}
+  m_SizeDelta: {x: 4, y: 10.9117}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!1 &1338432584
 GameObject:
@@ -624,8 +626,8 @@ Transform:
   m_GameObject: {fileID: 1338432584}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: -0.29, z: 0}
-  m_LocalScale: {x: 4, y: 6, z: 1}
+  m_LocalPosition: {x: 0, y: 0.9084, z: 0}
+  m_LocalScale: {x: 4, y: 8.397, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}

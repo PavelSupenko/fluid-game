@@ -122,6 +122,25 @@ namespace ParticlesSimulation.Components
         public float artificialPressureExponent;
         /// <summary>Reference distance for artificial pressure as fraction of smoothing radius (Δq/h).</summary>
         public float artificialPressureRadius;
+        /// <summary>
+        /// Successive Over-Relaxation factor (ω). Values > 1 accelerate convergence
+        /// by overshooting corrections, allowing fewer iterations to reach the same quality.
+        /// Typical range: 1.0 (no SOR) to 1.8. Values above ~1.9 risk divergence.
+        /// </summary>
+        public float sorOmega;
+        /// <summary>
+        /// XSPH viscosity coefficient (0..1). Blends each particle's velocity toward
+        /// the weighted average of its neighbors, producing smooth coherent flow.
+        /// Much better than scalar damping for viscous fluids (honey, ice cream).
+        /// 0 = disabled, 0.1–0.3 = light smoothing, 0.5+ = heavy viscosity.
+        /// </summary>
+        public float xsphViscosity;
+        /// <summary>
+        /// Tangential friction at boundaries (0 = frictionless slide, 1 = full stop on contact).
+        /// Controls how much tangential velocity is lost when a particle touches a wall.
+        /// Values 0.2–0.5 feel natural for most fluids.
+        /// </summary>
+        public float boundaryFriction;
     }
     
     public static class ConfigUtility
@@ -146,22 +165,25 @@ namespace ParticlesSimulation.Components
                 smoothingRadius = h,
                 smoothingRadiusSq = h2,
                 cellSizeInv = 1f / h,
-                fluidDamping = 0.3f,
-                stiffness = 0.5f,
+                fluidDamping = 0.05f,      // Reduced: XSPH handles viscosity better than scalar damping
+                stiffness = 1f,             // Full stiffness — SOR handles convergence acceleration
                 deltaTime = 1f / 60f,
                 poly6Coefficient = poly6,
                 spikyGradCoefficient = spikyGrad,
                 solverIterations = 4,
                 maxParticles = math.max(1024, maxParticles),
-                pbfEpsilon = 120f,
+                pbfEpsilon = 6f,            // Was 120 — that made constraints extremely soft
                 restDensity = 300f,
                 uniformParticleMass = 1f,
-                maxSpeed = 0.15f,
-                maxCorrectionFraction = 0.3f,
-                maxDisplacementFraction = 0.2f,
+                maxSpeed = 8f,              // Was 0.15 — let the solver do its job
+                maxCorrectionFraction = 0.8f,  // Was 0.3 — allow larger per-iteration corrections
+                maxDisplacementFraction = 0.5f, // Was 0.2 — still a safety valve but less restrictive
                 artificialPressureStrength = 0.1f,
                 artificialPressureExponent = 4f,
-                artificialPressureRadius = 0.2f
+                artificialPressureRadius = 0.2f,
+                sorOmega = 1.5f,            // SOR: 1.3–1.7 sweet spot for PBF
+                xsphViscosity = 0.3f,       // Smooth viscous flow (ice cream consistency)
+                boundaryFriction = 0.3f     // Moderate wall friction
             };
         }
 

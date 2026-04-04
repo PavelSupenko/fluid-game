@@ -27,14 +27,12 @@ namespace ParticlesSimulation
 
         public float Margin => math.max(0f, _margin);
 
-        public RectTransform AreaRect => _areaRect;
-
         /// <summary>
         /// World-space axis-aligned bounds on the XY plane from the rect's world corners.
         /// </summary>
         public bool TryGetWorldAabb(out float2 min, out float2 max)
         {
-            return _areaRect.TryGetWorldAabbXY(out min, out max);
+            return _areaRect.TryGetWorldAabbXY(Margin, out min, out max);
         }
 
         private void Awake()
@@ -83,7 +81,7 @@ namespace ParticlesSimulation
     /// </summary>
     public static class RectTransformSimulationBoundsUtility
     {
-        public static bool TryGetWorldAabbXY(this RectTransform rt, out float2 min, out float2 max)
+        public static bool TryGetWorldAabbXY(this RectTransform rt, float margin, out float2 min, out float2 max)
         {
             if (rt == null)
             {
@@ -102,6 +100,10 @@ namespace ParticlesSimulation
                 min = math.min(min, xy);
                 max = math.max(max, xy);
             }
+
+            //float doubleMargin = margin * 2;
+            //min += new float2(doubleMargin, doubleMargin);
+            //max -= new float2(doubleMargin, doubleMargin);
 
             return max.x > min.x && max.y > min.y;
         }

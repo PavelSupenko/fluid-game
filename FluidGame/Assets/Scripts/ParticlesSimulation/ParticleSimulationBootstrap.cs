@@ -37,14 +37,13 @@ namespace ParticlesSimulation
         [Tooltip("Manual particle spacing (used when Auto Fit is off or no bounds assigned).")]
         [SerializeField]
         private float _particleSpacing = 0.08f;
-        
-        [SerializeField]
-        private float _particleSpacingMultiplier = 0.8f;
 
-        [Tooltip("When enabled and Simulation Bounds is assigned, spacing and visual size " +
-                 "are computed automatically from the container dimensions and grid resolution.")]
+        [Tooltip("Smoothing radius as a multiple of measured particle spacing. " +
+                 "2.0 gives ~12 neighbors in 2D (stable). 1.5 gives ~8 (minimum). " +
+                 "Higher = smoother density estimates but slower.")]
+        [Range(1.5f, 3.0f)]
         [SerializeField]
-        private bool _autoFitToContainer = true;
+        private float _smoothingRadiusMultiplier = 2.0f;
 
         [Tooltip("Spawn origin when no Simulation Bounds is assigned.")]
         [SerializeField]
@@ -60,20 +59,42 @@ namespace ParticlesSimulation
         [SerializeField]
         private float _maxSpeed = 8f;
 
-        [Tooltip("Per-frame velocity damping for fluid particles (0 = no damping, 1 = full stop). " +
-                 "Higher values = thicker fluid. 0.3 gives honey-like behavior.")]
+        [Tooltip("Per-frame scalar velocity damping for fluid particles (0 = no damping, 1 = full stop). " +
+                 "Keep low (0.01–0.1) when using XSPH viscosity — XSPH handles viscous behavior better.")]
         [Range(0f, 1f)]
         [SerializeField]
-        private float _fluidDamping = 0.3f;
+        private float _fluidDamping = 0.05f;
 
+        [Tooltip("PBD stiffness applied to position corrections (0..1). " +
+                 "With SOR enabled, use 1.0 and let SOR omega control convergence rate.")]
+        [Range(0f, 1f)]
         [SerializeField]
-        private float _stiffness = 0.5f;
+        private float _stiffness = 1f;
 
         [SerializeField]
         private int _solverIterations = 4;
 
         [SerializeField]
         private float _particleMass = 1f;
+
+        [Tooltip("Successive Over-Relaxation factor. Values > 1 accelerate solver convergence " +
+                 "(1.5 ≈ doubling iteration count). Range: 1.0–1.8.")]
+        [Range(0.5f, 1.9f)]
+        [SerializeField]
+        private float _sorOmega = 1.5f;
+
+        [Tooltip("XSPH velocity smoothing (0 = off, 0.3 = viscous, 0.6+ = very thick). " +
+                 "Blends velocities between neighbors for cohesive flow. " +
+                 "Better than scalar damping for thick fluids like ice cream.")]
+        [Range(0f, 1f)]
+        [SerializeField]
+        private float _xsphViscosity = 0.3f;
+
+        [Tooltip("Tangential friction at boundaries (0 = frictionless, 1 = full stop). " +
+                 "Controls how particles slide along walls. 0.3 feels natural for most fluids.")]
+        [Range(0f, 1f)]
+        [SerializeField]
+        private float _boundaryFriction = 0.3f;
 
         [Tooltip("Manual rest density. Ignored when Auto Estimate is enabled.")]
         [SerializeField]
@@ -122,69 +143,126 @@ namespace ParticlesSimulation
                 return;
             }
 
-            ResolveSpacingAndVisualSize();
-
             entityManager = world.EntityManager;
-            CreateSingletons();
-            SpawnParticles();
+
+            // Phase 1: Parse image source (if any) so we know particle count.
+            ParseImageSource();
+
+            // Phase 2: Build spawn buffer — actual particle positions are determined here.
+            var buffer = BuildSpawnBuffer();
+            if (buffer.Length == 0)
+            {
+                UnityEngine.Debug.LogWarning("[ParticleSimulationBootstrap] No particles to spawn.");
+                buffer.Dispose();
+                return;
+            }
+
+            // Phase 3: Measure actual nearest-neighbor distance from the buffer.
+            //          This is the ONLY source of truth for spacing — no estimates.
+            var measuredSpacing = MeasureActualSpacing(buffer);
+
+            // Phase 4: Derive smoothing radius and visual size from measured spacing.
+            _resolvedSpacing = measuredSpacing;
+            _resolvedSmoothingRadius = measuredSpacing * _smoothingRadiusMultiplier;
+            _resolvedQuadHalfExtent = measuredSpacing * 0.45f;
+
+            UnityEngine.Debug.Log(
+                $"[ParticleSimulationBootstrap] Measured spacing={_resolvedSpacing:F5}, " +
+                $"smoothingRadius={_resolvedSmoothingRadius:F4} (×{_smoothingRadiusMultiplier:F2}), " +
+                $"quadHalfExtent={_resolvedQuadHalfExtent:F4}, particles={buffer.Length}");
+
+            // Phase 5: Create singleton entities with config derived from measured spacing.
+            CreateSingletons(buffer.Length);
+
+            // Phase 6: Instantiate particle entities from the buffer.
+            SpawnEntities(buffer);
+
+            buffer.Dispose();
         }
 
         /// <summary>
-        /// Computes effective particle spacing and visual quad size.
-        /// When <see cref="_autoFitToContainer"/> is enabled and bounds exist,
-        /// values are derived from the container inner rect and grid resolution.
+        /// Parses the image source if available. Must be called before BuildSpawnBuffer
+        /// so that ImageToFluid has generated its particle data.
         /// </summary>
-        private void ResolveSpacingAndVisualSize()
+        private void ParseImageSource()
         {
-            _resolvedSpacing = _particleSpacing;
-            _resolvedQuadHalfExtent = _quadHalfExtent;
-            _resolvedSmoothingRadius = _smoothingRadius;
-
-            if (!_autoFitToContainer || _simulationBounds == null || _simulationBounds.AreaRect == null)
+            if (_imageToFluid == null || _simulationBounds == null)
                 return;
 
-            if (_simulationBounds.AreaRect.TryGetWorldAabbXY(out var min, out var max) == false)
+            if (!_simulationBounds.TryGetWorldAabb(out var min, out var max))
                 return;
 
-            ComputeInnerClampBox(min, max, _simulationBounds.Margin, out var innerMin, out var innerMax);
-            var innerSize = innerMax - innerMin;
+            _imageToFluid.TryParseImage(Rect.MinMaxRect(min.x, min.y, max.x, max.y));
+        }
 
-            if (innerSize.x <= 0f || innerSize.y <= 0f)
-                return;
+        /// <summary>
+        /// Builds the spawn buffer with final world-space particle positions.
+        /// Positions come from either the image source or a procedural grid,
+        /// and are remapped to fit the simulation container if bounds exist.
+        /// </summary>
+        private NativeList<SpawnParticle> BuildSpawnBuffer()
+        {
+            var buffer = new NativeList<SpawnParticle>(Allocator.TempJob);
 
-            var gridX = math.max(1, _gridX);
-            var gridY = math.max(1, _gridY);
-
-            // Determine the dominant grid dimension.
-            // If an image source is present, use its particle count to estimate grid.
-            if (_imageToFluid != null)
+            if (_imageToFluid != null && _imageToFluid.IsReady)
             {
-                _imageToFluid.TryParseImage(Rect.MinMaxRect(min.x, min.y, max.x, max.y));
-                if (_imageToFluid.IsReady)
-                {
-                    var totalParticles = _imageToFluid.GeneratedParticleCount;
-                    // Estimate a square-ish grid for spacing purposes.
-                    var aspect = innerSize.x / innerSize.y;
-                    gridY = math.max(1, (int)math.sqrt(totalParticles / aspect));
-                    gridX = math.max(1, totalParticles / gridY);
-                }
+                AppendFromImage(buffer);
+                if (TryGetSpawnInnerRect(out var innerMin, out var innerMax))
+                    RemapSpawnBufferToInnerRect(buffer, innerMin, innerMax);
+            }
+            else
+            {
+                AppendFallbackGrid(buffer);
             }
 
-            // Spacing so that gridX × gridY particles fit inside the inner rect.
-            var spacing = math.min(innerSize.x / gridX, innerSize.y / gridY) * _particleSpacingMultiplier;
-            _resolvedSpacing = spacing;
+            return buffer;
+        }
 
-            // Visual size: slightly smaller than spacing so particles don't overlap.
-            _resolvedQuadHalfExtent = spacing * 0.45f;
+        /// <summary>
+        /// Measures the actual nearest-neighbor distance from a sample of the spawn buffer.
+        /// This is the ground truth for particle spacing — everything else (smoothingRadius,
+        /// restDensity, visual size) must be derived from this, not from grid estimates.
+        /// </summary>
+        private float MeasureActualSpacing(NativeList<SpawnParticle> buffer)
+        {
+            if (buffer.Length < 2)
+                return _particleSpacing;
 
-            // Smoothing radius must scale with spacing so particles see enough neighbors.
-            // Ratio of 1.5 gives ~8 neighbors in a 2D grid (all direct + diagonal).
-            _resolvedSmoothingRadius = spacing * 1.5f;
+            // Sample up to 64 particles distributed evenly through the buffer.
+            var sampleCount = math.min(buffer.Length, 64);
+            var step = math.max(1, buffer.Length / sampleCount);
+            var distSum = 0f;
+            var samples = 0;
 
-            UnityEngine.Debug.Log($"[ParticleSimulationBootstrap] Auto-fit: spacing={_resolvedSpacing:F4}, " +
-                                  $"quadHalfExtent={_resolvedQuadHalfExtent:F4}, " +
-                                  $"smoothingRadius={_resolvedSmoothingRadius:F4} " +
-                                  $"(container={innerSize.x:F2}×{innerSize.y:F2}, grid={gridX}×{gridY})");
+            for (var i = 0; i < buffer.Length && samples < sampleCount; i += step)
+            {
+                var pos = buffer[i].position;
+                var nearest = float.MaxValue;
+
+                // Brute-force nearest neighbor (only runs once at startup, not hot path).
+                for (var j = 0; j < buffer.Length; j++)
+                {
+                    if (j == i) continue;
+                    var d = math.lengthsq(buffer[j].position - pos);
+                    if (d < nearest) nearest = d;
+                }
+
+                distSum += math.sqrt(nearest);
+                samples++;
+            }
+
+            var measured = distSum / math.max(1, samples);
+
+            // Sanity check: if measurement is wildly off, fall back to manual spacing.
+            if (measured < 1e-6f || float.IsNaN(measured))
+            {
+                UnityEngine.Debug.LogWarning(
+                    $"[ParticleSimulationBootstrap] Measured spacing is invalid ({measured:E2}), " +
+                    $"falling back to manual spacing={_particleSpacing}");
+                return _particleSpacing;
+            }
+
+            return measured;
         }
 
         private void OnDestroy()
@@ -193,38 +271,28 @@ namespace ParticlesSimulation
                 Destroy(_runtimeQuadMesh);
         }
 
-        private void CreateSingletons()
+        private void CreateSingletons(int particleCount)
         {
             singletonEntity = entityManager.CreateEntity();
             entityManager.AddComponentData(singletonEntity, new SpatialGridMapTag());
 
-            var maxEstimate = 1;
-            if (_imageToFluid != null)
-            {
-                if (_imageToFluid.IsReady)
-                    maxEstimate = math.max(_imageToFluid.GeneratedParticleCount, 1);
-                else
-                    maxEstimate = _gridX * _gridY;
-            }
-            else
-            {
-                maxEstimate = _gridX * _gridY;
-            }
-
-            var cfg = ConfigUtility.CreateDefault(maxEstimate, _resolvedSmoothingRadius);
+            var cfg = ConfigUtility.CreateDefault(particleCount, _resolvedSmoothingRadius);
             cfg.gravityY = _gravityY;
             cfg.maxSpeed = _maxSpeed;
             cfg.fluidDamping = _fluidDamping;
             cfg.stiffness = _stiffness;
             cfg.solverIterations = _solverIterations;
             cfg.deltaTime = 1f / 60f;
-            cfg.maxParticles = math.max(cfg.maxParticles, maxEstimate + 256);
+            cfg.maxParticles = math.max(cfg.maxParticles, particleCount + 256);
             cfg.uniformParticleMass = _particleMass;
+            cfg.sorOmega = _sorOmega;
+            cfg.xsphViscosity = _xsphViscosity;
+            cfg.boundaryFriction = _boundaryFriction;
             if (_autoEstimateRestDensity)
             {
                 cfg.restDensity = ConfigUtility.EstimateRestDensity(in cfg, _resolvedSpacing);
                 UnityEngine.Debug.Log($"[ParticleSimulationBootstrap] Auto-estimated restDensity = {cfg.restDensity:F1} " +
-                                      $"(spacing={_resolvedSpacing}, h={_resolvedSmoothingRadius})");
+                                      $"(spacing={_resolvedSpacing:F5}, h={_resolvedSmoothingRadius:F4})");
             }
             else
             {
@@ -234,8 +302,7 @@ namespace ParticlesSimulation
             entityManager.AddComponentData(singletonEntity, cfg);
 
             var worldBounds = new SimulationWorldBounds { BoundsEnabled = 0 };
-            if (_simulationBounds != null &&
-                RectTransformSimulationBoundsUtility.TryGetWorldAabbXY(_simulationBounds.AreaRect, out var wMin, out var wMax))
+            if (_simulationBounds != null && _simulationBounds.TryGetWorldAabb(out var wMin, out var wMax))
             {
                 worldBounds = new SimulationWorldBounds
                 {
@@ -249,9 +316,12 @@ namespace ParticlesSimulation
             entityManager.AddComponentData(singletonEntity, worldBounds);
         }
 
-        private void SpawnParticles()
+        /// <summary>
+        /// Creates ECS entities from the pre-built spawn buffer. Config singleton must already exist.
+        /// </summary>
+        private void SpawnEntities(NativeList<SpawnParticle> buffer)
         {
-            if (spawned)
+            if (spawned || buffer.Length == 0)
                 return;
 
             if (_particleMaterial == null)
@@ -261,96 +331,70 @@ namespace ParticlesSimulation
                 return;
             }
 
-            var buffer = new NativeList<SpawnParticle>(Allocator.TempJob);
-            try
+            var centerOfMass = float2.zero;
+            for (var i = 0; i < buffer.Length; i++)
+                centerOfMass += buffer[i].position;
+            centerOfMass /= buffer.Length;
+
+            var archetype = entityManager.CreateArchetype(
+                typeof(ParticleCore),
+                typeof(ParticleFluid),
+                typeof(ParticleState),
+                typeof(ParticleSimulatedTag),
+                typeof(ParticleOriginalColor),
+                typeof(URPMaterialPropertyBaseColor),
+                typeof(LocalTransform));
+
+            var prototype = entityManager.CreateEntity(archetype);
+            var mesh = _quadMesh;
+            if (mesh == null)
             {
-                if (_imageToFluid != null && _imageToFluid.IsReady)
-                {
-                    AppendFromImage(buffer);
-                    if (TryGetSpawnInnerRect(out var innerMin, out var innerMax))
-                        RemapSpawnBufferToInnerRect(buffer, innerMin, innerMax);
-                }
-                else
-                {
-                    AppendFallbackGrid(buffer);
-                }
-
-                if (buffer.Length == 0)
-                {
-                    UnityEngine.Debug.LogWarning("[ParticleSimulationBootstrap] No particles spawned.");
-                    return;
-                }
-
-                var centerOfMass = float2.zero;
-                for (var i = 0; i < buffer.Length; i++)
-                    centerOfMass += buffer[i].position;
-                centerOfMass /= buffer.Length;
-
-                var archetype = entityManager.CreateArchetype(
-                    typeof(ParticleCore),
-                    typeof(ParticleFluid),
-                    typeof(ParticleState),
-                    typeof(ParticleSimulatedTag),
-                    typeof(ParticleOriginalColor),
-                    typeof(URPMaterialPropertyBaseColor),
-                    typeof(LocalTransform));
-
-                var prototype = entityManager.CreateEntity(archetype);
-                var mesh = _quadMesh;
-                if (mesh == null)
-                {
-                    _runtimeQuadMesh = CreateUnitQuadMesh();
-                    mesh = _runtimeQuadMesh;
-                }
-
-                var renderMeshArray = new RenderMeshArray(new[] { _particleMaterial }, new[] { mesh });
-                var desc = new RenderMeshDescription(
-                    shadowCastingMode: ShadowCastingMode.Off,
-                    receiveShadows: false,
-                    motionVectorGenerationMode: MotionVectorGenerationMode.ForceNoMotion,
-                    layer: _renderingLayer);
-
-                RenderMeshUtility.AddComponents(
-                    prototype,
-                    entityManager,
-                    desc,
-                    renderMeshArray,
-                    MaterialMeshInfo.FromRenderMeshArrayIndices(0, 0));
-
-                using var entities = new NativeArray<Entity>(buffer.Length, Allocator.TempJob);
-                entityManager.Instantiate(prototype, entities);
-                entityManager.DestroyEntity(prototype);
-
-                using var commandBuffer = new EntityCommandBuffer(Allocator.TempJob);
-
-                // Use the config's restDensity which may have been auto-estimated.
-                var spawnConfig = entityManager.GetComponentData<SimulationConfig>(singletonEntity);
-
-                var setupJob = new SetupParticlesJob
-                {
-                    Entities = entities,
-                    Buffer = buffer.AsArray(),
-                    CommandBuffer = commandBuffer.AsParallelWriter(),
-                    CenterOfMass = centerOfMass,
-                    RestDensity = spawnConfig.restDensity,
-                    QuadScale = _resolvedQuadHalfExtent * 2f,
-                    PositionJitter = _resolvedSpacing * 0.02f,
-                    RandomSeed = 42u
-                };
-
-                setupJob.Schedule(buffer.Length, 64).Complete();
-                commandBuffer.Playback(entityManager);
-
-                var cfg = entityManager.GetComponentData<SimulationConfig>(singletonEntity);
-                cfg.maxParticles = math.max(cfg.maxParticles, buffer.Length + 256);
-                entityManager.SetComponentData(singletonEntity, cfg);
-
-                spawned = true;
+                _runtimeQuadMesh = CreateUnitQuadMesh();
+                mesh = _runtimeQuadMesh;
             }
-            finally
+
+            var renderMeshArray = new RenderMeshArray(new[] { _particleMaterial }, new[] { mesh });
+            var desc = new RenderMeshDescription(
+                shadowCastingMode: ShadowCastingMode.Off,
+                receiveShadows: false,
+                motionVectorGenerationMode: MotionVectorGenerationMode.ForceNoMotion,
+                layer: _renderingLayer);
+
+            RenderMeshUtility.AddComponents(
+                prototype,
+                entityManager,
+                desc,
+                renderMeshArray,
+                MaterialMeshInfo.FromRenderMeshArrayIndices(0, 0));
+
+            using var entities = new NativeArray<Entity>(buffer.Length, Allocator.TempJob);
+            entityManager.Instantiate(prototype, entities);
+            entityManager.DestroyEntity(prototype);
+
+            using var commandBuffer = new EntityCommandBuffer(Allocator.TempJob);
+
+            var spawnConfig = entityManager.GetComponentData<SimulationConfig>(singletonEntity);
+
+            var setupJob = new SetupParticlesJob
             {
-                buffer.Dispose();
-            }
+                Entities = entities,
+                Buffer = buffer.AsArray(),
+                CommandBuffer = commandBuffer.AsParallelWriter(),
+                CenterOfMass = centerOfMass,
+                RestDensity = spawnConfig.restDensity,
+                QuadScale = _resolvedQuadHalfExtent * 2f,
+                PositionJitter = 0f,// _resolvedSpacing * 0.02f,
+                RandomSeed = 42u
+            };
+
+            setupJob.Schedule(buffer.Length, 64).Complete();
+            commandBuffer.Playback(entityManager);
+
+            var cfg = entityManager.GetComponentData<SimulationConfig>(singletonEntity);
+            cfg.maxParticles = math.max(cfg.maxParticles, buffer.Length + 256);
+            entityManager.SetComponentData(singletonEntity, cfg);
+
+            spawned = true;
         }
 
         private static Mesh CreateUnitQuadMesh()
@@ -428,7 +472,7 @@ namespace ParticlesSimulation
             {
                 for (var x = 0; x < _gridX; x++)
                 {
-                    var pos = _fallbackOrigin + new float2(x * _resolvedSpacing, y * _resolvedSpacing);
+                    var pos = _fallbackOrigin + new float2(x * _particleSpacing, y * _particleSpacing);
                     var t = (float)(x + y) / math.max(1, _gridX + _gridY - 2);
                     var col = Color.HSVToRGB(t, 0.65f, 0.95f);
                     buffer.Add(new SpawnParticle
@@ -444,9 +488,9 @@ namespace ParticlesSimulation
         private bool TryGetSpawnInnerRect(out float2 innerMin, out float2 innerMax)
         {
             innerMin = innerMax = default;
-            if (_simulationBounds == null || _simulationBounds.AreaRect == null)
+            if (_simulationBounds == null)
                 return false;
-            if (!RectTransformSimulationBoundsUtility.TryGetWorldAabbXY(_simulationBounds.AreaRect, out var wMin, out var wMax))
+            if (!_simulationBounds.TryGetWorldAabb(out var wMin, out var wMax))
                 return false;
 
             ComputeInnerClampBox(wMin, wMax, _simulationBounds.Margin, out innerMin, out innerMax);

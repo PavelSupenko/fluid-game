@@ -44,6 +44,8 @@ namespace ParticlesSimulation.Jobs
         /// <summary>Maximum distance a particle can move in one frame (world units).</summary>
         public float MaxDisplacement;
         public float MaxDisplacementSq;
+        /// <summary>Tangential friction coefficient at boundaries (0 = frictionless, 1 = full stop).</summary>
+        public float BoundaryFriction;
         public SimulationWorldBounds WorldBounds;
 
         public void Execute(ref ParticleCore core)
@@ -79,38 +81,33 @@ namespace ParticlesSimulation.Jobs
             }
 
             var velocity = (predicted - position) * InverseDeltaTime;
+            var friction = 1f - BoundaryFriction;
 
-            // Inelastic boundary: change velocity component directed into the wall.
-            if (atMinX)
+            // Inelastic boundary: zero the normal component, apply friction to tangential.
+            // Unlike the previous hard clamp (±0.05), friction preserves the solver's
+            // lateral corrections so compressed particles can actually spread out.
+            if (atMinX && velocity.x < 0f)
             {
-                if (velocity.x < 0f)
-                    velocity.x = 0f;
-
-                velocity.y /= 3f;
+                velocity.x = 0f;
+                velocity.y *= friction;
             }
 
-            if (atMaxX)
+            if (atMaxX && velocity.x > 0f)
             {
-                if (velocity.x > 0f)
-                    velocity.x = 0f;
-                
-                velocity.y /= 3f;
+                velocity.x = 0f;
+                velocity.y *= friction;
             }
 
-            if (atMinY)
+            if (atMinY && velocity.y < 0f)
             {
-                if (velocity.y < 0f)
-                    velocity.y = 0f;
-                
-                velocity.x = math.clamp(velocity.x, -0.05f, 0.05f);
+                velocity.y = 0f;
+                velocity.x *= friction;
             }
 
-            if (atMaxY)
+            if (atMaxY && velocity.y > 0f)
             {
-                if (velocity.y > 0f)
-                    velocity.y = 0f;
-                
-                velocity.x = math.clamp(velocity.x, -0.05f, 0.05f);
+                velocity.y = 0f;
+                velocity.x *= friction;
             }
 
             // Hard cap on velocity magnitude.

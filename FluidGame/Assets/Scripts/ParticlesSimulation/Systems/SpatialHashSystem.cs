@@ -16,6 +16,10 @@ namespace ParticlesSimulation.Systems
     /// <remarks>
     /// Uses <see cref="SystemBase"/> (class-based) so that dependent systems can cache
     /// a managed reference and read the native containers directly.
+    /// The entity query deliberately includes all simulation components
+    /// (<see cref="ParticleCore"/>, <see cref="ParticleFluid"/>, <see cref="ParticleState"/>,
+    /// <see cref="ParticleSimulatedTag"/>) to guarantee that <c>[EntityIndexInQuery]</c>
+    /// produces identical ordering across this system, the PBF solver, and XSPH viscosity.
     /// </remarks>
     [UpdateInGroup(typeof(ParticleSimulationGroup))]
     [UpdateAfter(typeof(PredictionSystem))]
@@ -34,7 +38,7 @@ namespace ParticlesSimulation.Systems
         /// <summary>Predicted positions indexed by entity query order. Valid after this system updates.</summary>
         public NativeArray<float2> Positions => _positions;
 
-        /// <summary>Neighbor counts per particle. Valid after this system updates.</summary>
+        /// <summary>Neighbor counts per particle. Valid after this system updates (debug builds only).</summary>
         public NativeArray<int> NeighborCounts => _neighborCounts;
 
         /// <summary>Number of active particles this frame.</summary>
@@ -48,8 +52,10 @@ namespace ParticlesSimulation.Systems
 
         protected override void OnCreate()
         {
+            // Query must match PbfSolverSystem and XsphViscositySystem exactly
+            // so that EntityIndexInQuery produces identical particle ordering.
             _particleQuery = SystemAPI.QueryBuilder()
-                .WithAll<ParticleCore, ParticleState, ParticleSimulatedTag>()
+                .WithAll<ParticleCore, ParticleFluid, ParticleState, ParticleSimulatedTag>()
                 .Build();
 
             RequireForUpdate(_particleQuery);
@@ -87,7 +93,9 @@ namespace ParticlesSimulation.Systems
                 CellSizeInverse = config.cellSizeInv
             }.Schedule(particleCount, 128, extractHandle);
 
-            // Step 3: count neighbors per particle (useful for debug and PBF diagnostics).
+            // Step 3: count neighbors (debug/diagnostics only — skipped in release builds).
+            // On mobile at 4K+ particles this saves a full neighbor traversal per frame.
+#if DebugLog
             var neighborSlice = _neighborCounts.GetSubArray(0, particleCount);
 
             var countHandle = new CountNeighborsJob
@@ -101,6 +109,10 @@ namespace ParticlesSimulation.Systems
 
             Dependency = countHandle;
             FinalJobHandle = countHandle;
+#else
+            Dependency = buildHandle;
+            FinalJobHandle = buildHandle;
+#endif
         }
 
         private void EnsureCapacity(int particleCount, int maxParticles)

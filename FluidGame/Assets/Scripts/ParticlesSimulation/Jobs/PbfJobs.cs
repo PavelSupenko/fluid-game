@@ -247,18 +247,19 @@ namespace ParticlesSimulation.Jobs
     }
 
     /// <summary>
-    /// Applies position corrections with PBD stiffness scaling, magnitude clamping,
-    /// and boundary enforcement. Boundary clamping during solver iteration prevents
-    /// corrections from pushing particles outside the container, which would create
-    /// large discrepancies for finalization to resolve.
+    /// Applies position corrections with SOR (Successive Over-Relaxation), magnitude clamping,
+    /// and boundary enforcement. SOR with ω > 1 overshoots corrections to accelerate
+    /// convergence, effectively doubling the iteration count at ω ≈ 1.5.
+    /// Boundary clamping during solver iteration prevents corrections from pushing
+    /// particles outside the container.
     /// </summary>
     [BurstCompile]
     public struct ApplyPositionCorrectionJob : IJobParallelFor
     {
         public NativeArray<float2> Positions;
         [ReadOnly] public NativeArray<float2> Corrections;
-        /// <summary>Stiffness / solverIterations — PBD relaxation scaling.</summary>
-        public float Stiffness;
+        /// <summary>SOR relaxation factor ω (1.0 = standard Jacobi, 1.3–1.7 = accelerated).</summary>
+        public float Omega;
         /// <summary>Maximum correction magnitude (typically fraction of smoothing radius).</summary>
         public float MaxCorrection;
         /// <summary>Clamping bounds (already margin-adjusted). Zero = disabled.</summary>
@@ -268,7 +269,7 @@ namespace ParticlesSimulation.Jobs
 
         public void Execute(int index)
         {
-            var correction = Corrections[index] * Stiffness;
+            var correction = Corrections[index] * Omega;
             var magnitudeSq = math.lengthsq(correction);
             if (magnitudeSq > MaxCorrection * MaxCorrection)
                 correction *= MaxCorrection * math.rsqrt(magnitudeSq);
@@ -299,6 +300,85 @@ namespace ParticlesSimulation.Jobs
             core.predictedPosition = Positions[index];
             fluid.density = Densities[index];
             fluid.lambda = Lambdas[index];
+        }
+    }
+
+    /// <summary>
+    /// XSPH velocity smoothing: blends each particle's velocity toward the weighted
+    /// average of its neighbors. Produces coherent, viscous flow (ideal for thick
+    /// fluids like honey or ice cream) without the energy-killing effect of scalar damping.
+    /// Formula: v_new = v_old + c · Σⱼ (vⱼ − vᵢ) · W_poly6(rᵢⱼ) / ρⱼ
+    /// </summary>
+    [BurstCompile(FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard)]
+    public struct XsphViscosityJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<float2> Positions;
+        [ReadOnly] public NativeArray<float2> Velocities;
+        [ReadOnly] public NativeArray<float> Densities;
+        [ReadOnly] public NativeParallelMultiHashMap<int, int> Grid;
+        public float CellSizeInverse;
+        public float SmoothingRadiusSq;
+        public float Poly6Coefficient;
+        /// <summary>XSPH blending factor c (0..1).</summary>
+        public float Viscosity;
+
+        [WriteOnly] public NativeArray<float2> SmoothedVelocities;
+
+        public void Execute(int index)
+        {
+            var position = Positions[index];
+            var velocity = Velocities[index];
+            var cell = SpatialHash.CellCoords(position, CellSizeInverse);
+            var hSq = SmoothingRadiusSq;
+            var delta = float2.zero;
+
+            for (var dy = -1; dy <= 1; dy++)
+            {
+                for (var dx = -1; dx <= 1; dx++)
+                {
+                    var neighborCellHash = SpatialHash.Hash(cell + new int2(dx, dy));
+
+                    if (!Grid.TryGetFirstValue(neighborCellHash, out var neighborIndex, out var iterator))
+                        continue;
+
+                    do
+                    {
+                        if (neighborIndex == index)
+                            continue;
+
+                        var distanceSq = math.lengthsq(Positions[neighborIndex] - position);
+                        if (distanceSq >= hSq)
+                            continue;
+
+                        var diff = hSq - distanceSq;
+                        var wPoly6 = Poly6Coefficient * diff * diff * diff;
+
+                        // Weight by 1/ρⱼ so denser regions don't dominate the average.
+                        var neighborDensity = Densities[neighborIndex];
+                        var weight = wPoly6 * math.rcp(math.max(neighborDensity, 1e-6f));
+
+                        delta += (Velocities[neighborIndex] - velocity) * weight;
+                    } while (Grid.TryGetNextValue(out neighborIndex, ref iterator));
+                }
+            }
+
+            SmoothedVelocities[index] = velocity + delta * Viscosity;
+        }
+    }
+
+    /// <summary>
+    /// Writes XSPH-smoothed velocities back into ECS particle components.
+    /// Must run after <see cref="XsphViscosityJob"/> fills the smoothed array.
+    /// </summary>
+    [BurstCompile]
+    [WithAll(typeof(ParticleSimulatedTag))]
+    internal partial struct WriteBackXsphVelocitiesJob : IJobEntity
+    {
+        [ReadOnly] public NativeArray<float2> SmoothedVelocities;
+
+        public void Execute([EntityIndexInQuery] int index, ref ParticleCore core)
+        {
+            core.velocity = SmoothedVelocities[index];
         }
     }
 }

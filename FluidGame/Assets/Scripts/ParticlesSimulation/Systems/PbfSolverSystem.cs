@@ -86,7 +86,9 @@ namespace ParticlesSimulation.Systems
 
             // --- Solver iteration loop ---
             var iterations = math.max(1, config.solverIterations);
-            var perIterationStiffness = math.saturate(config.stiffness) / iterations;
+            // PBD relaxation with SOR: each iteration applies (stiffness · ω / N) of the correction.
+            // stiffness=1, ω=1.5, N=4 → 0.375 per iteration ≈ 1.5× acceleration over standard Jacobi.
+            var omega = math.saturate(config.stiffness) * math.clamp(config.sorOmega, 0.5f, 1.9f) / iterations;
             var maxCorrection = config.maxCorrectionFraction * config.smoothingRadius;
 
             // Precompute clamping bounds for in-solver boundary enforcement.
@@ -148,12 +150,12 @@ namespace ParticlesSimulation.Systems
                     Corrections = correctionSlice
                 }.Schedule(particleCount, 64, handle);
 
-                // 4. Apply Δp with stiffness scaling, magnitude clamping, and boundary enforcement.
+                // 4. Apply Δp with SOR relaxation, magnitude clamping, and boundary enforcement.
                 handle = new ApplyPositionCorrectionJob
                 {
                     Positions = workingPositions,
                     Corrections = correctionSlice,
-                    Stiffness = perIterationStiffness,
+                    Omega = omega,
                     MaxCorrection = maxCorrection,
                     BoundsEnabled = solverBoundsEnabled,
                     BoundsMin = solverBoundsMin,
