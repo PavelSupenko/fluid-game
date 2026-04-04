@@ -417,22 +417,22 @@ MonoBehaviour:
   _gridX: 32
   _gridY: 48
   _particleSpacing: 0.08
-  _smoothingRadiusMultiplier: 3
+  _smoothingRadiusMultiplier: 4
   _fallbackOrigin:
     x: -1.6
     y: -2.2
   _smoothingRadius: 0.12
-  _gravityY: -9.81
+  _gravityY: -6
   _maxSpeed: 8
   _fluidDamping: 0.05
-  _stiffness: 1
-  _solverIterations: 4
+  _stiffness: 0.2
+  _solverIterations: 2
   _autoIterations: 0
   _particleMass: 1
-  _sorOmega: 0.5
+  _sorOmega: 1
   _xsphViscosity: 0.3
   _boundaryFriction: 0.3
-  _cohesionStrength: 0.2
+  _cohesionStrength: 0
   _restDensity: 300
   _autoEstimateRestDensity: 1
   _particleMaterial: {fileID: 2100000, guid: fdd1a38c5dd934d2487ea31e043e902f, type: 2}

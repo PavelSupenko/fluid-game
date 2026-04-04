@@ -4,7 +4,6 @@ using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
-using UnityEngine;
 
 namespace ParticlesSimulation.Systems
 {
@@ -21,6 +20,7 @@ namespace ParticlesSimulation.Systems
     /// </summary>
     [UpdateInGroup(typeof(SimulationSystemGroup))]
     [UpdateAfter(typeof(ParticleSimulationGroup))]
+    [DisableAutoCreation]
     public partial class PbfDiagnosticSystem : SystemBase
     {
         private EntityQuery _particleQuery;
