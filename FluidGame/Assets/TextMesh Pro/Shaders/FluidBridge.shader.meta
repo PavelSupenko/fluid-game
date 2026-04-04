@@ -1,0 +1,13 @@
+fileFormatVersion: 2
+<<<<<<<< HEAD:FluidGame/Assets/TextMesh Pro/Shaders/FluidBridge.shader.meta
+guid: afbb583073bf743f5840781c812a83aa
+========
+guid: dd89cf5b9246416f84610a006f916af7
+>>>>>>>> feature/ecs/struct-project:FluidGame/Assets/TextMesh Pro/Shaders/TMP_SDF Overlay.shader.meta
+ShaderImporter:
+  externalObjects: {}
+  defaultTextures: []
+  nonModifiableTextures: []
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

@@ -1,0 +1,21 @@
+{
+    "name": "Services.Cheats.Editor",
+    "rootNamespace": "MeltIt.Services",
+    "references": [
+        "VContainer",
+        "UniTask",
+        "Services",
+        "Services.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
